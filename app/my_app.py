@@ -18,8 +18,16 @@ def init_connection():
 # Perform query.
 # Uses st.cache_data to only rerun when the query changes or after 10 min.
 @st.cache_data(ttl=600)
-def run_query(supabase):
+def run_query():
+    supabase = init_connection()
     return supabase.table("mytable").select("*").execute()
+
+def convert_to_df(data):
+    data_list = []
+    for row in data.data:
+        data_list.append(row.values())
+    df = pd.DataFrame(data_list, columns=row.keys())
+    return df
 
 def create_interactive_grid(data):
     gb = GridOptionsBuilder.from_dataframe(data)
@@ -49,7 +57,7 @@ def create_interactive_grid(data):
 def create_plot(df):
     # Create a plot
     fig, ax = plt.subplots()
-    ax.plot(df['Number 1'], df['Number 2'])
+    ax.plot(df['num1'], df['num2'])
 
     # Display the plot using Streamlit
     return st.pyplot(fig)
@@ -63,9 +71,10 @@ def main():
     
     col1, col2 = st.columns(2)
 
-    supabase = init_connection()
-    data = run_query(supabase)
-    data.columns = ['Number 1', 'Number 2']
+    data = run_query()
+    st.write(data)
+
+    data = convert_to_df(data)
 
     with col1:
         df = create_interactive_grid(data)
