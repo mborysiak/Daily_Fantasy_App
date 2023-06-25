@@ -66,7 +66,7 @@ def main():
     st.write("Welcome to my app!")
 
     # db_path = st.secrets['connections']
-    db_path = 'app/daily_fantasy_app/app/data.db'
+    db_path = 'data.sqlite3'
     st.write(db_path)
     
     col1, col2 = st.columns(2)
