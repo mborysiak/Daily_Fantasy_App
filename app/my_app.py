@@ -72,8 +72,6 @@ def main():
     col1, col2 = st.columns(2)
 
     data = run_query()
-    st.write(data)
-
     data = convert_to_df(data)
 
     with col1:
