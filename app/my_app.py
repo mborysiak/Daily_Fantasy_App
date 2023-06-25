@@ -21,7 +21,7 @@ def create_fake_data():
 
 def pull_data(db_path):
     # conn = st.experimental_connection('data_db', type='sql')
-    conn = sqlite3.connect('data.db')
+    conn = sqlite3.connect(db_path)
     df = pd.read_sql_query('select * from data', conn)
     return df
 
@@ -65,18 +65,17 @@ def main():
     st.title("My First Streamlit App")
     st.write("Welcome to my app!")
 
-    db_path = st.secrets['connections']
+    # db_path = st.secrets['connections']
+    db_path = 'data.db'
     st.write(db_path)
     
     col1, col2 = st.columns(2)
-    data = pull_data(db_path)
+    data = pull_data()
     with col1:
         df = create_interactive_grid(data)
 
     with col2:
         create_plot(df)
-
-    st.write(st.secrets['connections'])
 
 if __name__ == '__main__':
     main()
