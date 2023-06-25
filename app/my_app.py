@@ -6,7 +6,7 @@ from st_aggrid import GridOptionsBuilder, AgGrid, GridUpdateMode, DataReturnMode
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
-import sqlite3
+import sqlalchemy
 
 def create_fake_data():
      # Create fake data
@@ -19,8 +19,8 @@ def create_fake_data():
     return data
 
 def pull_data():
-    conn = st.experimental_connection('data', type='sql')
-    df = pd.read_sql('SELECT * FROM data', conn)
+    conn = st.experimental_connection('data', type='sql', url = "sqlite:///data.sqlite3")
+    df = conn.query('select * from data')
     return df
 
 def create_interactive_grid(data):
