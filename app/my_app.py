@@ -15,12 +15,10 @@ def init_connection():
     key = st.secrets["supabase_key"]
     return create_client(url, key)
 
-supabase = init_connection()
-
 # Perform query.
 # Uses st.cache_data to only rerun when the query changes or after 10 min.
 @st.cache_data(ttl=600)
-def run_query():
+def run_query(supabase):
     return supabase.table("mytable").select("*").execute()
 
 def create_interactive_grid(data):
@@ -64,7 +62,9 @@ def main():
     st.write("Welcome to my app!")
     
     col1, col2 = st.columns(2)
-    data = run_query()
+
+    supabase = init_connection()
+    data = run_query(supabase)
     data.columns = ['Number 1', 'Number 2']
 
     with col1:
