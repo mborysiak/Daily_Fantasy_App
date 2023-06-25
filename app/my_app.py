@@ -70,7 +70,7 @@ def main():
     st.write(db_path)
     
     col1, col2 = st.columns(2)
-    data = pull_data()
+    data = pull_data(db_path)
     with col1:
         df = create_interactive_grid(data)
 
