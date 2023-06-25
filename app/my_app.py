@@ -65,7 +65,7 @@ def main():
     st.title("My First Streamlit App")
     st.write("Welcome to my app!")
     import os
-    st.write(os.getcwd()
+    st.write(os.getcwd())
     # db_path = st.secrets['connections']
     db_path = '/app/Daily_Fantasy_App/app/data.sqlite3'
     st.write(db_path)
