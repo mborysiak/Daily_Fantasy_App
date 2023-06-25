@@ -1,29 +1,27 @@
 #%%
 import streamlit as st
 import pandas as pd
-import random
 from st_aggrid import GridOptionsBuilder, AgGrid, GridUpdateMode, DataReturnMode
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
-import sqlalchemy
-import sqlite3
+from supabase import create_client, Client
 
-def create_fake_data():
-     # Create fake data
-    data = []
-    for i in range(10):
-        num1 = i*2
-        num2 = np.sin(num1)
-        data.append((num1, num2))
-    data = pd.DataFrame(data, columns=['Number 1', 'Number 2'])
-    return data
+# Initialize connection.
+# Uses st.cache_resource to only run once.
+@st.cache_resource
+def init_connection():
+    url = st.secrets["supabase_url"]
+    key = st.secrets["supabase_key"]
+    return create_client(url, key)
 
-def pull_data(db_path):
-    # conn = st.experimental_connection('data_db', type='sql')
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query('select * from data', conn)
-    return df
+supabase = init_connection()
+
+# Perform query.
+# Uses st.cache_data to only rerun when the query changes or after 10 min.
+@st.cache_data(ttl=600)
+def run_query():
+    return supabase.table("mytable").select("*").execute()
 
 def create_interactive_grid(data):
     gb = GridOptionsBuilder.from_dataframe(data)
@@ -64,14 +62,11 @@ def main():
     st.set_page_config(layout="wide")
     st.title("My First Streamlit App")
     st.write("Welcome to my app!")
-    import os
-    st.write(os.getcwd())
-    # db_path = st.secrets['connections']
-    db_path = 'app/daily_fantasy_app/data.db'
-    st.write(db_path)
     
     col1, col2 = st.columns(2)
-    data = pull_data(db_path)
+    data = run_query()
+    data.columns = ['Number 1', 'Number 2']
+
     with col1:
         df = create_interactive_grid(data)
 
