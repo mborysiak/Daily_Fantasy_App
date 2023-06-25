@@ -56,3 +56,7 @@ supabase.table('model_predictions').insert(upload).execute() # inserting one rec
 supabase.table('model_predictions').select('*').execute()
 
 # %%
+import sqlite3
+conn = sqlite3.connect('test.sqlite3')
+df.to_sql('model_predictions', conn, if_exists='replace', index=False)
+# %%

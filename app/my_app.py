@@ -46,12 +46,11 @@ def create_interactive_grid(data):
         gridOptions=gridOptions,
         data_return_mode='AS_INPUT', 
         update_mode='MODEL_CHANGED', 
+        columns_auto_size=ColumnsAutoSizeMode.FIT_CONTENTS,
         # fit_columns_on_grid_load=True,
         enable_enterprise_modules=True,
-        column_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-        height=350, 
+        height=500, 
         width='100%',
-        max_height=350,
         reload_data=False
     )
 
@@ -63,18 +62,15 @@ def create_interactive_grid(data):
 
 def create_plot(df):
     # Create a plot
-    fig, ax = plt.subplots()
-    ax.plot(df['num1'], df['num2'])
+    ax = df[['player', 'dk_salary']].set_index('player').plot(kind='barh')
 
     # Display the plot using Streamlit
-    return st.pyplot(fig)
+    return st.write(ax.get_figure())
 
 
 def main():
     # Set page configuration
     st.set_page_config(layout="wide")
-    st.title("My First Streamlit App")
-    st.write("Welcome to my app!")
     
     col1, col2 = st.columns(2)
 
@@ -85,11 +81,11 @@ def main():
     data = run_query(filepath)
     # data = convert_to_df(data)
 
-    # with col1:
-    df = create_interactive_grid(data)
-    st.write(data.shape)
-    # with col2:
-        # create_plot(df)
+    with col1:
+        df = create_interactive_grid(data)
+        st.write(data.shape)
+    with col2:
+        create_plot(df)
 
 if __name__ == '__main__':
     main()
