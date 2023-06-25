@@ -19,7 +19,7 @@ def create_fake_data():
     return data
 
 def pull_data():
-    conn = sqlite3.connect('data.sqlite3')
+    conn = st.experimental_connection('data', type='sql')
     df = pd.read_sql('SELECT * FROM data', conn)
     return df
 
@@ -75,4 +75,3 @@ if __name__ == '__main__':
     main()
 # %%
 
-# %%
