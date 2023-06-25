@@ -87,6 +87,7 @@ def main():
     col1, col2 = st.columns(2)
 
     filepath = get_filepath('test.sqlite3')
+    st.write(filepath)
     data = run_query(filepath)
     # data = convert_to_df(data)
 
