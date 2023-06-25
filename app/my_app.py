@@ -30,8 +30,20 @@ import os
 #     df = pd.DataFrame(data_list, columns=row.keys())
 #     return df
 
+def get_filepath(filename):
+    from pathlib import Path
+    filepath = Path(__file__).parents[0] / filename
+    return filepath
+
+# def run_query(filepath):
+#     return pd.read_csv(filepath)
+
 def run_query(filepath):
-    return pd.read_csv(filepath)
+    import sqlite3
+    conn = sqlite3.connect(filepath)
+    df= pd.read_sql_query("SELECT * FROM model_predictions", conn)
+    df.dk_salary = df.dk_salary.astype('float').astype('int')
+    return df
 
 def create_interactive_grid(data):
     gb = GridOptionsBuilder.from_dataframe(data)
@@ -74,10 +86,7 @@ def main():
     
     col1, col2 = st.columns(2)
 
-    from pathlib import Path
-    filepath = Path(__file__).parents[0] / 'test.csv'
-    st.write(filepath)
-
+    filepath = get_filepath('test.sqlite3')
     data = run_query(filepath)
     # data = convert_to_df(data)
 
