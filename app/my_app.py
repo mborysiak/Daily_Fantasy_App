@@ -6,6 +6,7 @@ from st_aggrid import GridOptionsBuilder, AgGrid, GridUpdateMode, DataReturnMode
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
+import sqlite3
 
 def create_fake_data():
      # Create fake data
@@ -16,6 +17,11 @@ def create_fake_data():
         data.append((num1, num2))
     data = pd.DataFrame(data, columns=['Number 1', 'Number 2'])
     return data
+
+def pull_data():
+    conn = sqlite3.connect('data.sqlite3')
+    df = pd.read_sql('SELECT * FROM data', conn)
+    return df
 
 def create_interactive_grid(data):
     gb = GridOptionsBuilder.from_dataframe(data)
@@ -58,7 +64,7 @@ def main():
     st.write("Welcome to my app!")
     
     col1, col2 = st.columns(2)
-    data = create_fake_data()
+    data = pull_data()
     with col1:
         df = create_interactive_grid(data)
 
@@ -67,4 +73,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+# %%
+
 # %%
