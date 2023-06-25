@@ -7,6 +7,7 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
 import sqlalchemy
+import sqlite3
 
 def create_fake_data():
      # Create fake data
@@ -18,9 +19,10 @@ def create_fake_data():
     data = pd.DataFrame(data, columns=['Number 1', 'Number 2'])
     return data
 
-def pull_data():
-    conn = st.experimental_connection('data_db', type='sql')
-    df = conn.query('select * from data')
+def pull_data(db_path):
+    # conn = st.experimental_connection('data_db', type='sql')
+    conn = sqlite3.connect('data.db')
+    df = pd.read_sql_query('select * from data', conn)
     return df
 
 def create_interactive_grid(data):
@@ -62,14 +64,19 @@ def main():
     st.set_page_config(layout="wide")
     st.title("My First Streamlit App")
     st.write("Welcome to my app!")
+
+    db_path = st.secrets['connections']
+    st.write(db_path)
     
     col1, col2 = st.columns(2)
-    data = pull_data()
+    data = pull_data(db_path)
     with col1:
         df = create_interactive_grid(data)
 
     with col2:
         create_plot(df)
+
+    st.write(st.secrets['connections'])
 
 if __name__ == '__main__':
     main()
