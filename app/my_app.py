@@ -19,7 +19,7 @@ def create_fake_data():
     return data
 
 def pull_data():
-    conn = st.experimental_connection('data', type='sql', url = "sqlite:///data.sqlite3")
+    conn = st.experimental_connection('data', type='sql', url = "/app/daily_fantasy_app/app/data.db")
     df = conn.query('select * from data')
     return df
 
