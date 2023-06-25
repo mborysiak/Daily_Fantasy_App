@@ -6,6 +6,7 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
 from supabase import create_client, Client
+import os
 
 # # Initialize connection.
 # # Uses st.cache_resource to only run once.
@@ -30,7 +31,7 @@ from supabase import create_client, Client
 #     return df
 
 def run_query():
-    return pd.read_csv('test.csv')
+    return pd.read_csv(f'{os.getcwd()}/test.csv')
 
 def create_interactive_grid(data):
     gb = GridOptionsBuilder.from_dataframe(data)
@@ -76,6 +77,8 @@ def main():
     st.write("Welcome to my app!")
     
     col1, col2 = st.columns(2)
+
+    print(os.getcwd())
 
     data = run_query()
     # data = convert_to_df(data)
