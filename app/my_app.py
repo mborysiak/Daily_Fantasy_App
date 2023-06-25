@@ -67,7 +67,7 @@ def main():
     import os
     st.write(os.getcwd())
     # db_path = st.secrets['connections']
-    db_path = '/app/daily_fantasy_app/data.sqlite3'
+    db_path = 'app/daily_fantasy_app/data.sqlite3'
     st.write(db_path)
     
     col1, col2 = st.columns(2)
