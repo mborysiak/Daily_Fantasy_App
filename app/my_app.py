@@ -30,8 +30,8 @@ import os
 #     df = pd.DataFrame(data_list, columns=row.keys())
 #     return df
 
-def run_query():
-    return pd.read_csv(f'{os.getcwd()}/test.csv')
+def run_query(filepath):
+    return pd.read_csv(filepath)
 
 def create_interactive_grid(data):
     gb = GridOptionsBuilder.from_dataframe(data)
@@ -78,9 +78,11 @@ def main():
     
     col1, col2 = st.columns(2)
 
-    print(os.getcwd())
+    from pathlib import Path
+    filepath = Path(__file__).parents[0] / 'test.csv'
+    st.write(filepath)
 
-    data = run_query()
+    data = run_query(filepath)
     # data = convert_to_df(data)
 
     # with col1:
