@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
-from daily_sim import FootballSimulation
+# from daily_sim import FootballSimulation
 from ff.db_operations import DataManage
 
 year = 2022
@@ -143,7 +143,7 @@ def main():
     ownership = pull_ownership(conn, week, year)
     salary_cap, pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
     
-    sim = initiate_fantasysim(dm, op_params, salary_cap, pos_require_start)
+    # sim = initiate_fantasysim(dm, op_params, salary_cap, pos_require_start)
 
     with col1:
         st.write(ownership.head())
