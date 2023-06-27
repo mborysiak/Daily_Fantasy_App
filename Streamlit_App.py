@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
-
+from daily_sim import FootballSimulation
+from ff.db_operations import DataManage
 
 year = 2022
 week = 2
@@ -21,9 +22,12 @@ total_lineups = 5
 
 def get_conn(filename):
     from pathlib import Path
+    folderpath = Path(__file__).parents[0]
     filepath = Path(__file__).parents[0] / filename
     conn = sqlite3.connect(filepath)
-    return conn
+    dm = DataManage(folderpath)
+    
+    return conn, dm
 
 def pull_op_params(conn, week, year):
 
@@ -46,7 +50,7 @@ def pull_ownership(conn, week, year):
     return ownership
 
 
-def pull_requirements():
+def pull_sim_requirements():
     # set league information, included position requirements, number of teams, and salary cap
     salary_cap = 50000
     pos_require_start = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'DEF': 1}
@@ -58,6 +62,31 @@ def pull_requirements():
     pos_require_flex['DEF'] = 1
     total_pos = np.sum(list(pos_require_flex.values()))
     return salary_cap, pos_require_start, pos_require_flex, total_pos
+
+def initiate_fantasysim(dm, op_params, salary_cap, pos_require_start):
+
+    # extract all the operating parameters
+    pred_vers = op_params['pred_vers']
+    ensemble_vers = op_params['ensemble_vers']
+    std_dev_type = op_params['std_dev_type']
+    ownership_vers = op_params['ownership_vers']
+    full_model_rel_weight = eval(op_params['full_model_weight'])
+    covar_type = eval(op_params['covar_type'])
+    use_ownership = eval(op_params['use_ownership'])
+    salary_remain_max = eval(op_params['max_salary_remain'])
+
+    print('Full Model Weight:', full_model_rel_weight, 'Use Ownership:', use_ownership)
+
+    if covar_type == 'no_covar': use_covar=False
+    else: use_covar=True
+
+    # instantiate simulation class and add salary information to data
+    sim = FootballSimulation(dm, week, year, salary_cap, pos_require_start, num_iters,
+                            pred_vers, ensemble_vers, std_dev_type, covar_type,
+                            full_model_rel_weight, matchup_seed=False, use_covar=use_covar, use_ownership=1,
+                            salary_remain_max=salary_remain_max, db_name='Simulation_App')
+
+    return sim
 
 #------------------
 # App Components
@@ -109,9 +138,12 @@ def main():
     st.set_page_config(layout="wide")
     
     col1, col2 = st.columns(2)
-    conn = get_conn('Simulation.sqlite3')
+    conn, dm = get_conn('Simulation_App.sqlite3')
     op_params = pull_op_params(conn, week, year)
     ownership = pull_ownership(conn, week, year)
+    salary_cap, pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
+    
+    sim = initiate_fantasysim(dm, op_params, salary_cap, pos_require_start)
 
     with col1:
         st.write(ownership.head())
