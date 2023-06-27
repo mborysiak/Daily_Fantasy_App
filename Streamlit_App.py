@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
-# from daily_sim import FootballSimulation
-from ff.db_operations import DataManage
+from zSim_Helper_Covar import FootballSimulation
+from db_operations import DataManage
 
 year = 2022
 week = 2
