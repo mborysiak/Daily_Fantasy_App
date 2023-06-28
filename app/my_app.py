@@ -9,7 +9,7 @@ import copy
 import sqlite3
 from zSim_Helper_Covar import FootballSimulation
 from db_operations import DataManage
-
+import cvxopt
 
 year = 2022
 week = 2
