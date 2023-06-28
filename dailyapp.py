@@ -25,7 +25,7 @@ def get_conn(filename):
     folderpath = Path(__file__).parents[0]
     filepath = Path(__file__).parents[0] / filename
     conn = sqlite3.connect(filepath)
-    # dm = DataManage(folderpath)
+    dm = DataManage(folderpath)
     
     return conn, dm
 
