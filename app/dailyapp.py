@@ -85,8 +85,10 @@ def initiate_fantasysim(dm, op_params, salary_cap, pos_require_start):
                             pred_vers, ensemble_vers, std_dev_type, covar_type,
                             full_model_rel_weight, matchup_seed=False, use_covar=use_covar, use_ownership=1,
                             salary_remain_max=salary_remain_max, db_name='Simulation_App')
+    
+    player_data = sim.player_data[['player', 'pos', 'salary']].sort_values(by='salary', ascending=False)
 
-    return sim
+    return sim, player_data
 
 #------------------
 # App Components
@@ -143,13 +145,13 @@ def main():
     ownership = pull_ownership(conn, week, year)
     salary_cap, pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
     
-    sim = initiate_fantasysim(dm, op_params, salary_cap, pos_require_start)
+    sim, player_data = initiate_fantasysim(dm, op_params, salary_cap, pos_require_start)
 
     with col1:
-        st.write(ownership.head())
-        df = create_interactive_grid(ownership)
+        df = create_interactive_grid(player_data)
     with col2:
-        st.write(op_params)
+        if len(df)>0:
+            st.write(list(df.player.values))
         # create_plot(df)
 
         # st.download_button(
@@ -159,8 +161,6 @@ def main():
         #     "text/csv",
         #     key='download-csv'
         # )
-
- 
 
 
 if __name__ == '__main__':
