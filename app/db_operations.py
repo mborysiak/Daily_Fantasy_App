@@ -2,7 +2,6 @@
 import datetime as dt
 import os
 import shutil
-from ff.general import get_timestamp, get_username
 import sqlite3
 import pandas as pd 
 
@@ -38,11 +37,11 @@ class DataManage:
             backup_folder (str, optional): [description]. Defaults to 'DB_Versioning'.
         """        
         # get timestamp string to append to name
-        ts = get_timestamp()
+    
 
         # setup the old and new paths to save out database
         old_path = f'{self.data_path}/{db_name}.sqlite3'
-        new_path = f'{self.data_path}/{backup_folder}/{db_name}_{ts}.sqlite3'
+        new_path = f'{self.data_path}/{backup_folder}/{db_name}.sqlite3'
 
         # copy the current database over to new folder with timestamp appended    
         shutil.copyfile(old_path, new_path)
