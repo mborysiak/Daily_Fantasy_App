@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
-from zSim_Helper_Covar import FootballSimulation
-from db_operations import DataManage
+# from zSim_Helper_Covar import FootballSimulation
+# from db_operations import DataManage
 
 year = 2022
 week = 2
@@ -25,9 +25,9 @@ def get_conn(filename):
     folderpath = Path(__file__).parents[0]
     filepath = Path(__file__).parents[0] / filename
     conn = sqlite3.connect(filepath)
-    dm = DataManage(folderpath)
+    # dm = DataManage(folderpath)
     
-    return conn, dm
+    return conn#, dm
 
 def pull_op_params(conn, week, year):
 
