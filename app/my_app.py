@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
+from zSim_Helper_Covar import FootballSimulation
+from db_operations import DataManage
 
 
 year = 2022
