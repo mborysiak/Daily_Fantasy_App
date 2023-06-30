@@ -341,7 +341,9 @@ def main():
     st.set_page_config(layout="wide")
 
     st.title('🏈 Fantasy Football Lineup Optimizer')
-    st.write('Hello Spider! 😎 Welcome to the Fantasy Football Lineup Optimizer! This app will help you choose the optimal lineup for your DraftKings fantasy football team. Follow the steps below to get started.')
+    st.subheader('Hello Spider! 😎')
+    st.write('Welcome to the Fantasy Football Lineup Optimizer! This app will help you choose the optimal lineup for your DraftKings fantasy football team.')
+    st.write('Follow the steps below to get started.')
     st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
 
     col1, col2, col3 = st.columns([4, 3, 3])
