@@ -354,14 +354,14 @@ def main():
     st.write(player_data)
     display_data = get_display_data(player_data)
     st.write(display_data.dtypes)
+    st.write(data_class.pred_vers, data_class.ensemble_vers, data_class.std_dev_type)
+    st.write(data_class.covar_type, data_class.full_model_weight)
+    st.write(sim.num_iters, sim.use_ownership, sim.salary_remain_max)
     
     sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
 
     with col1:
         st.header('Choose Players')
-        st.write(data_class.pred_vers, data_class.ensemble_vers, data_class.std_dev_type)
-        st.write(data_class.covar_type, data_class.full_model_weight)
-        st.write(sim.num_iters, sim.use_ownership, sim.salary_remain_max)
         selected = create_interactive_grid(display_data)
         my_team = selected.loc[selected.add_player==True]
     
