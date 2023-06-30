@@ -345,14 +345,21 @@ def main():
     pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
     team_display = init_my_team_df(pos_require_flex) 
 
-    if st.button("Refresh Data"):
-        st.cache_resource.clear()
-        op_params['New Data'] = True
+    with st.sidebar:
+
+        st.header('Simulation Parameters')
+        st.write('Week:', week)
+        st.write('Year:', year)
+        
+
+        if st.button("Refresh Data"):
+            st.cache_resource.clear()
+            op_params['New Data'] = True
 
     data_class = PullData(week, year, db_name, op_params)
     player_data, covar, min_max = data_class.pull_player_data()
     display_data = get_display_data(player_data)
-    
+
     # st.write(data_class.pred_vers, data_class.ensemble_vers, data_class.std_dev_type)
     # st.write(data_class.covar_type, data_class.full_model_weight)
     # st.write(sim.num_iters, sim.use_ownership, sim.salary_remain_max)
@@ -376,6 +383,7 @@ def main():
         subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
 
     results, team_cnts = run_sim(selected, sim, op_params)
+    results = results[results.SelectionCounts<100]
     
     with col3: 
         st.header('Simulation Results')
