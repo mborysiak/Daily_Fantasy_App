@@ -267,7 +267,9 @@ def create_plot(df):
     return st.write(ax.get_figure())
 
 @st.cache_data
-def convert_df_for_dl(df):
+def download_saved_teams(db_name):
+    conn = get_conn(db_name)
+    df = pd.read_sql_query('SELECT * FROM My_Team', conn)
     return df.to_csv(index=False).encode('utf-8')
 
 @st.cache_data
@@ -362,6 +364,14 @@ def main():
             st.cache_resource.clear()
             op_params['New Data'] = True
 
+        st.download_button(
+                "Download Saved Teams",
+                download_saved_teams(db_name),
+                f"week{week}_year{year}_saved_teams.csv",
+                "text/csv",
+                key='download-csv'
+            )
+
     data_class = PullData(week, year, db_name, op_params)
     player_data, covar, min_max = data_class.pull_player_data()
     display_data = get_display_data(player_data)
@@ -378,7 +388,16 @@ def main():
 
         selected = create_interactive_grid(display_data)
         my_team = selected.loc[selected.my_team==True]
+
+    results, team_cnts = run_sim(selected, sim, op_params)
+    results = results[results.SelectionCounts<100]
     
+    with col2: 
+        st.header('2. Review Top Choices')
+        st.write('*These are the optimal players to choose from* ⬇️')
+
+        st.dataframe(results, use_container_width=True, height=500)
+
     with col3:      
         st.header("⚡:green[Your Team]⚡")  
         st.write('*Players selected so far 🏈*')
@@ -389,17 +408,12 @@ def main():
         subcol1, subcol2, subcol3 = st.columns(3)
         remaining_salary = 50000-my_team.salary.sum()
         subcol1.metric('Remaining Salary', remaining_salary)
-        subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
-
-    results, team_cnts = run_sim(selected, sim, op_params)
-    results = results[results.SelectionCounts<100]
-    
-    with col2: 
-        st.header('2. Review Top Choices')
-        st.write('*These are the optimal players to choose from* ⬇️')
-
-        st.dataframe(results, use_container_width=True, height=500)
+        if total_pos-len(my_team) > 0: subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
+        else: subcol2.metric('Per Player', 'N/A')
         
+        with subcol3:
+             if st.button("Save Team"):
+                 my_team.to_sql('My_Team', if_exists='replace', con=get_conn(db_name), index=False)
 
         # st.download_button(
         #     "Press to Download",
