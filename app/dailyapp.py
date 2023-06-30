@@ -340,8 +340,10 @@ def main():
     # Set page configuration
     st.set_page_config(layout="wide")
 
-    st.title('🏈Fantasy Football Lineup Optimizer')
-    
+    st.title('🏈 Fantasy Football Lineup Optimizer')
+    st.write('Hello Spider! 😎 Welcome to the Fantasy Football Lineup Optimizer! This app will help you choose the optimal lineup for your DraftKings fantasy football team.')
+    st.write('💻 NOTE: We recommend using desktop for the best experience.')
+
     col1, col2, col3 = st.columns([4, 3, 3])
     op_params = pull_op_params(db_name, week, year)
     pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
