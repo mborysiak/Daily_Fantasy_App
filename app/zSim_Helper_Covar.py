@@ -17,7 +17,7 @@ cvxopt.glpk.options['msg_lev'] = 'GLP_MSG_OFF'
 
 class FootballSimulation:
 
-    def __init__(self, player_data, covar, week, set_year, salary_cap, 
+    def __init__(self, player_data, covar, min_max, week, set_year, salary_cap, 
                  pos_require_start, num_iters, matchup_seed=False, use_covar=True, 
                  use_ownership=0, salary_remain_max=None, db_name='Simulation_App'):
 
@@ -34,6 +34,7 @@ class FootballSimulation:
 
         self.player_data = player_data
         self.covar = covar
+        self.min_max = min_max
 
         # pull in the vegas points
         self.vegas_points = self.pull_vegas_points()
@@ -203,7 +204,7 @@ class FootballSimulation:
     def covar_dist(self, num_options=500):
 
         unique_matchups = self.unique_matchup_pairs(self.matchups)
-        min_max = self.get_model_predictions()[['player', 'min_score', 'max_score']]
+        min_max = self.min_max
         
         dists = pd.DataFrame()
         for matchup in unique_matchups:

@@ -181,42 +181,77 @@ class PullData:
 
     def pull_player_data(self):
 
-        if self.use_covar: player_data, covar = self.pull_covar()
-        else: player_data, covar = self.pull_model_predictions(), None
+        if self.use_covar: 
+            player_data, covar = self.pull_covar()
+            min_max = self.pull_model_predictions()[['player', 'min_score', 'max_score']]
+        else: 
+            player_data, covar, min_max = self.pull_model_predictions(), None, None
 
         player_data = self.join_salary(player_data)
 
-        return player_data, covar
+        return player_data, covar, min_max
+    
 
 #------------------
 # App Components
 #------------------
 
+# def create_interactive_grid(data):
+#     gb = GridOptionsBuilder.from_dataframe(data)
+#     # add pagination
+#     # gb.configure_pagination(paginationAutoPageSize=True)
+#     gb.configure_side_bar()
+#     gb.configure_selection('multiple', use_checkbox=True, groupSelectsChildren="Group checkbox select children") #Enable multi-row selection
+#     gb.configure_column('Include Player', editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': ['Yes', 'No'] })
+#     gridOptions = gb.build()
+
+#     grid_response = AgGrid(
+#         data,
+#         gridOptions=gridOptions,
+#         data_return_mode='AS_INPUT', 
+#         update_mode='SELECTION_CHANGED', 
+#         columns_auto_size=ColumnsAutoSizeMode.FIT_CONTENTS,
+#         fit_columns_on_grid_load=True,
+#         height=500, 
+#         width='100%',
+#         reload_data=False
+#     )
+
+#     data = grid_response['data']
+#     selected = grid_response['selected_rows'] 
+#     df = pd.DataFrame(selected) 
+
+#     return df
+
+def get_display_data(player_data):
+    display_data = player_data[['player', 'pos', 'salary', 'pred_fp_per_game']].sort_values(by='salary', ascending=False).reset_index(drop=True)
+    display_data['add_player'] = [False]*len(display_data)
+    display_data['exclude_player'] = [False]*len(display_data)
+    display_data = display_data.rename(columns={'pred_fp_per_game': 'pred_pts'})
+    display_data.pred_pts = display_data.pred_pts.round(1)
+    return display_data
+
 def create_interactive_grid(data):
-    gb = GridOptionsBuilder.from_dataframe(data)
-    # add pagination
-    # gb.configure_pagination(paginationAutoPageSize=True)
-    gb.configure_side_bar()
-    gb.configure_selection('multiple', use_checkbox=True, groupSelectsChildren="Group checkbox select children") #Enable multi-row selection
-    gridOptions = gb.build()
-
-    grid_response = AgGrid(
-        data,
-        gridOptions=gridOptions,
-        data_return_mode='AS_INPUT', 
-        update_mode='SELECTION_CHANGED', 
-        columns_auto_size=ColumnsAutoSizeMode.FIT_CONTENTS,
-        fit_columns_on_grid_load=True,
-        height=500, 
-        width='100%',
-        reload_data=False
-    )
-
-    data = grid_response['data']
-    selected = grid_response['selected_rows'] 
-    df = pd.DataFrame(selected) 
-
-    return df
+    selected = st.data_editor(
+            data,
+            column_config={
+                "add_player": st.column_config.CheckboxColumn(
+                    "add_player",
+                    help="Choose players to add to your team",
+                    default=False,
+                ),
+                "exclude_player": st.column_config.CheckboxColumn(
+                    "exclude_player",
+                    help="Choose players to exclude from consideration",
+                    default=False,
+                )
+            },
+            use_container_width=True,
+            disabled=["widgets"],
+            hide_index=True,
+            height=500
+        )
+    return selected
 
 def create_plot(df):
     # Create a plot
@@ -230,12 +265,12 @@ def convert_df_for_dl(df):
     return df.to_csv(index=False).encode('utf-8')
 
 @st.cache_data
-def init_sim(player_data, covar, use_covar, op_params, pos_require_start):
+def init_sim(player_data, covar, min_max, use_covar, op_params, pos_require_start):
     num_iters = eval(op_params['num_iters'])
     use_ownership = eval(op_params['use_ownership'])
     salary_remain_max = eval(op_params['max_salary_remain'])
 
-    sim = FootballSimulation(player_data, covar, week, year, salary_cap=50000, 
+    sim = FootballSimulation(player_data, covar, min_max, week, year, salary_cap=50000, 
                              pos_require_start=pos_require_start, num_iters=num_iters, 
                              matchup_seed=False, use_covar=use_covar, use_ownership=use_ownership, 
                              salary_remain_max=salary_remain_max, db_name=db_name)
@@ -243,11 +278,12 @@ def init_sim(player_data, covar, use_covar, op_params, pos_require_start):
 
 
 def run_sim(df, sim, op_params):
-        to_add = list(df.player.values)
-        to_drop = []
+        to_add = list(df[df.add_player==True].player.values)
+        to_drop = list(df[df.exclude_player==True].player.values)
         min_player_same_team_input = 2
         set_max_team = None
-        results, team_cnts = sim.run_sim(to_add, to_drop, min_player_same_team_input, set_max_team)
+        results, team_cnts = sim.run_sim(to_add, to_drop, min_player_same_team_input, set_max_team,
+                                         ownership_vers='mil_only')
         return results, team_cnts
 
 
@@ -298,7 +334,7 @@ def main():
     # Set page configuration
     st.set_page_config(layout="wide")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3 = st.columns([3, 2, 2])
     op_params = pull_op_params(db_name, week, year)
     pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
     team_display = init_my_team_df(pos_require_flex) 
@@ -308,27 +344,37 @@ def main():
         op_params['New Data'] = True
 
     data_class = PullData(week, year, db_name, op_params)
-    player_data, covar = data_class.pull_player_data()
-    display_data = player_data[['player', 'pos', 'salary', 'pred_fp_per_game']].sort_values(by='salary', ascending=False).reset_index(drop=True)
+    player_data, covar, min_max = data_class.pull_player_data()
+    display_data = get_display_data(player_data)
     
-    sim = init_sim(player_data, covar, data_class.use_covar, op_params, pos_require_start)
-    
-    with col1:
-        st.write(data_class.pred_vers, data_class.ensemble_vers, data_class.std_dev_type)
-        st.write(data_class.covar_type, data_class.full_model_weight)
-        st.write(sim.num_iters, sim.use_ownership, sim.salary_remain_max)
-        selected = create_interactive_grid(display_data)
+    sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
 
-       
-    with col2:        
-        try: st.dataframe(team_fill(team_display, selected), use_container_width = True)
+    with col1:
+        st.header('Choose Players')
+        # st.write(data_class.pred_vers, data_class.ensemble_vers, data_class.std_dev_type)
+        # st.write(data_class.covar_type, data_class.full_model_weight)
+        # st.write(sim.num_iters, sim.use_ownership, sim.salary_remain_max)
+        selected = create_interactive_grid(display_data)
+    
+    with col2:      
+        st.header('Selected Team')  
+        
+        my_team = selected.loc[selected.add_player==True]
+        
+        try: st.dataframe(team_fill(team_display, my_team), use_container_width = True)
         except: st.dataframe(team_display, use_container_width = True)
 
-    try: results, team_cnts = run_sim(selected, sim, op_params)
-    except: results, team_cnts = run_sim(pd.DataFrame({'player': []}), sim, op_params)
+        subcol1, subcol2, subcol3 = st.columns(3)
+        remaining_salary = 50000-my_team.salary.sum()
+        subcol1.metric('Remaining Salary', remaining_salary)
+        subcol2.metric('Per Player', int(remaining_salary / (9-len(my_team))))
+
+    results, team_cnts = run_sim(selected, sim, op_params)
     
     with col3: 
+        st.header('Simulation Results')
         st.dataframe(results, use_container_width=True, height=500)
+        print(selected)
 
         # st.download_button(
         #     "Press to Download",
