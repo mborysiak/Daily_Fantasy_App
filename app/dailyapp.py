@@ -224,11 +224,15 @@ class PullData:
 #     return df
 
 def get_display_data(player_data):
+    
     display_data = player_data[['player', 'pos', 'salary', 'pred_fp_per_game']].sort_values(by='salary', ascending=False).reset_index(drop=True)
+    
     display_data['add_player'] = [False]*len(display_data)
     display_data['exclude_player'] = [False]*len(display_data)
+    
     display_data = display_data.rename(columns={'pred_fp_per_game': 'pred_pts'})
     display_data.pred_pts = display_data.pred_pts.round(1)
+    
     return display_data
 
 def create_interactive_grid(data):
@@ -355,11 +359,10 @@ def main():
         # st.write(data_class.covar_type, data_class.full_model_weight)
         # st.write(sim.num_iters, sim.use_ownership, sim.salary_remain_max)
         selected = create_interactive_grid(display_data)
+        my_team = selected.loc[selected.add_player==True]
     
     with col2:      
         st.header('Selected Team')  
-        
-        my_team = selected.loc[selected.add_player==True]
         
         try: st.dataframe(team_fill(team_display, my_team), use_container_width = True)
         except: st.dataframe(team_display, use_container_width = True)
@@ -367,14 +370,14 @@ def main():
         subcol1, subcol2, subcol3 = st.columns(3)
         remaining_salary = 50000-my_team.salary.sum()
         subcol1.metric('Remaining Salary', remaining_salary)
-        subcol2.metric('Per Player', int(remaining_salary / (9-len(my_team))))
+        subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
 
     results, team_cnts = run_sim(selected, sim, op_params)
     
     with col3: 
         st.header('Simulation Results')
         st.dataframe(results, use_container_width=True, height=500)
-        print(selected)
+        
 
         # st.download_button(
         #     "Press to Download",
