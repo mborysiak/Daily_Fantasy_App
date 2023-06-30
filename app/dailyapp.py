@@ -229,7 +229,9 @@ def get_display_data(player_data):
     
     display_data['add_player'] = False
     display_data['exclude_player'] = False
-    
+    display_data.add_player = display_data.add_player.astype(bool)
+    display_data.exclude_player = display_data.exclude_player.astype(bool)
+
     display_data = display_data.rename(columns={'pred_fp_per_game': 'pred_pts'})
     display_data.pred_pts = display_data.pred_pts.round(1)
     
@@ -349,6 +351,7 @@ def main():
 
     data_class = PullData(week, year, db_name, op_params)
     player_data, covar, min_max = data_class.pull_player_data()
+    st.write(player_data)
     display_data = get_display_data(player_data)
     st.write(display_data.dtypes)
     
