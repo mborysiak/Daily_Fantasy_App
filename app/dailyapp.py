@@ -227,10 +227,10 @@ def get_display_data(player_data):
     
     display_data = player_data[['player', 'pos', 'salary', 'pred_fp_per_game']].sort_values(by='salary', ascending=False).reset_index(drop=True)
     
-    display_data['add_player'] = False
-    display_data['exclude_player'] = False
-    display_data.add_player = display_data.add_player.astype(bool)
-    display_data.exclude_player = display_data.exclude_player.astype(bool)
+    display_data['my_team'] = False
+    display_data['exclude'] = False
+    display_data.my_team = display_data.my_team.astype(bool)
+    display_data.exclude = display_data.exclude.astype(bool)
 
     display_data = display_data.rename(columns={'pred_fp_per_game': 'pred_pts'})
     display_data.pred_pts = display_data.pred_pts.round(1)
@@ -241,13 +241,13 @@ def create_interactive_grid(data):
     selected = st.data_editor(
             data,
             column_config={
-                "add_player": st.column_config.CheckboxColumn(
-                    "add_player",
+                "my_team": st.column_config.CheckboxColumn(
+                    "my_team",
                     help="Choose players to add to your team",
                     default=False,
                 ),
-                "exclude_player": st.column_config.CheckboxColumn(
-                    "exclude_player",
+                "exclude": st.column_config.CheckboxColumn(
+                    "exclude",
                     help="Choose players to exclude from consideration",
                     default=False,
                 )
@@ -284,8 +284,8 @@ def init_sim(player_data, covar, min_max, use_covar, op_params, pos_require_star
 
 
 def run_sim(df, sim, op_params):
-        to_add = list(df[df.add_player==True].player.values)
-        to_drop = list(df[df.exclude_player==True].player.values)
+        to_add = list(df[df.my_team==True].player.values)
+        to_drop = list(df[df.exclude==True].player.values)
         min_player_same_team_input = 2
         set_max_team = None
         results, team_cnts = sim.run_sim(to_add, to_drop, min_player_same_team_input, set_max_team,
@@ -330,7 +330,7 @@ def team_fill(df, df2):
             if min_idx is not np.nan:
                 df.loc[min_idx, ['Player', 'Salary']] = [row.player, row.salary]
 
-    return df
+    return df[['Position', 'Player', 'Salary']]
 
 
 #--------------------------
@@ -339,8 +339,10 @@ def team_fill(df, df2):
 def main():
     # Set page configuration
     st.set_page_config(layout="wide")
+
+    st.title('🏈Fantasy Football Lineup Optimizer')
     
-    col1, col2, col3 = st.columns([3, 2, 2])
+    col1, col2, col3 = st.columns([4, 3, 3])
     op_params = pull_op_params(db_name, week, year)
     pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
     team_display = init_my_team_df(pos_require_flex) 
@@ -350,7 +352,7 @@ def main():
         st.header('Simulation Parameters')
         st.write('Week:', week)
         st.write('Year:', year)
-        
+
 
         if st.button("Refresh Data"):
             st.cache_resource.clear()
@@ -367,15 +369,18 @@ def main():
     sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
 
     with col1:
-        st.header('Choose Players')
+        st.header('1. Choose Players')
+        st.write('*Check **my_team** box to select a player* ✅')
+
         selected = create_interactive_grid(display_data)
-        my_team = selected.loc[selected.add_player==True]
+        my_team = selected.loc[selected.my_team==True]
     
-    with col2:      
-        st.header('Selected Team')  
+    with col3:      
+        st.header("⚡:green[Your Team]⚡")  
+        st.write('*Players selected so far 🏈*')
         
-        try: st.dataframe(team_fill(team_display, my_team), use_container_width = True)
-        except: st.dataframe(team_display, use_container_width = True)
+        try: st.table(team_fill(team_display, my_team))
+        except: st.table(team_display)
 
         subcol1, subcol2, subcol3 = st.columns(3)
         remaining_salary = 50000-my_team.salary.sum()
@@ -385,8 +390,10 @@ def main():
     results, team_cnts = run_sim(selected, sim, op_params)
     results = results[results.SelectionCounts<100]
     
-    with col3: 
-        st.header('Simulation Results')
+    with col2: 
+        st.header('2. Review Top Choices')
+        st.write('*These are the optimal players to choose from* ⬇️')
+
         st.dataframe(results, use_container_width=True, height=500)
         
 
