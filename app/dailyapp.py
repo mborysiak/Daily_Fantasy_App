@@ -227,8 +227,8 @@ def get_display_data(player_data):
     
     display_data = player_data[['player', 'pos', 'salary', 'pred_fp_per_game']].sort_values(by='salary', ascending=False).reset_index(drop=True)
     
-    display_data['add_player'] = [False]*len(display_data)
-    display_data['exclude_player'] = [False]*len(display_data)
+    display_data['add_player'] = False
+    display_data['exclude_player'] = False
     
     display_data = display_data.rename(columns={'pred_fp_per_game': 'pred_pts'})
     display_data.pred_pts = display_data.pred_pts.round(1)
