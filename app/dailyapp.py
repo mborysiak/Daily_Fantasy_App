@@ -413,8 +413,10 @@ def main():
         
         with subcol3:
              if st.button("Save Team"):
-                 my_team.to_sql('My_Team', if_exists='replace', con=get_conn(db_name), index=False)
-
+                 try: st.session_state['df1'] = pd.concat([st.session_state['df1'], my_team], axis=0)
+                 except: st.session_state['df1'] = my_team.copy()
+                #  my_team.to_sql('My_Team', if_exists='append', con=get_conn(db_name), index=False)
+                 st.write(st.session_state['df1'])
         # st.download_button(
         #     "Press to Download",
         #     convert_df_for_dl(df),
