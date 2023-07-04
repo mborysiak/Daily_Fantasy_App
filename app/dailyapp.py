@@ -270,7 +270,8 @@ def create_plot(df):
 def download_saved_teams():
     # conn = get_conn(db_name)
     # df = pd.read_sql_query('SELECT * FROM My_Team', conn)
-    df = st.session_state['df1']
+    try: df = st.session_state['df1']
+    except: st.write('No saved teams yet!')
     return df.to_csv(index=False).encode('utf-8')
 
 @st.cache_data
