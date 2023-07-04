@@ -367,7 +367,7 @@ def main():
 
         st.download_button(
                 "Download Saved Teams",
-                download_saved_teams(db_name),
+                download_saved_teams(),
                 f"week{week}_year{year}_saved_teams.csv",
                 "text/csv",
                 key='download-csv'
