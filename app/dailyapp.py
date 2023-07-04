@@ -275,7 +275,7 @@ def download_saved_teams():
         return df.to_csv(index=False).encode('utf-8')
     except: 
         st.write('No saved teams yet!')
-        return
+        return pd.DataFrame().to_csv().encode('utf-8')
     
 
 @st.cache_data
