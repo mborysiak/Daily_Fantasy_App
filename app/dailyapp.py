@@ -267,9 +267,10 @@ def create_plot(df):
     return st.write(ax.get_figure())
 
 @st.cache_data
-def download_saved_teams(db_name):
-    conn = get_conn(db_name)
-    df = pd.read_sql_query('SELECT * FROM My_Team', conn)
+def download_saved_teams():
+    # conn = get_conn(db_name)
+    # df = pd.read_sql_query('SELECT * FROM My_Team', conn)
+    df = st.session_state['df1']
     return df.to_csv(index=False).encode('utf-8')
 
 @st.cache_data
@@ -286,13 +287,13 @@ def init_sim(player_data, covar, min_max, use_covar, op_params, pos_require_star
 
 
 def run_sim(df, sim, op_params):
-        to_add = list(df[df.my_team==True].player.values)
-        to_drop = list(df[df.exclude==True].player.values)
-        min_player_same_team_input = 2
-        set_max_team = None
-        results, team_cnts = sim.run_sim(to_add, to_drop, min_player_same_team_input, set_max_team,
-                                         ownership_vers='mil_only')
-        return results, team_cnts
+    to_add = list(df[df.my_team==True].player.values)
+    to_drop = list(df[df.exclude==True].player.values)
+    min_player_same_team_input = 2
+    set_max_team = None
+    results, team_cnts = sim.run_sim(to_add, to_drop, min_player_same_team_input, set_max_team,
+                                        ownership_vers='mil_only')
+    return results, team_cnts
 
 
 def init_my_team_df(pos_require):
