@@ -270,12 +270,11 @@ def create_plot(df):
 def download_saved_teams():
     # conn = get_conn(db_name)
     # df = pd.read_sql_query('SELECT * FROM My_Team', conn)
-    try: 
-        df = st.session_state['df1']
-        return df.to_csv(index=False).encode('utf-8')
-    except: 
-        st.write('No saved teams yet!')
-        return pd.DataFrame().to_csv().encode('utf-8')
+    
+    return st.session_state['lineups'].to_csv(index=False).encode('utf-8')
+    # except: 
+    #     st.write('No saved teams yet!')
+    #     return pd.DataFrame().to_csv().encode('utf-8')
     
 
 @st.cache_data
@@ -347,6 +346,8 @@ def team_fill(df, df2):
 def main():
     # Set page configuration
     st.set_page_config(layout="wide")
+    if 'lineups' not in st.session_state:
+        st.session_state['lineups'] = pd.DataFrame()
 
     st.title('🏈 Fantasy Football Lineup Optimizer')
     st.subheader('Hello Spider! 😎')
@@ -419,17 +420,11 @@ def main():
         
         with subcol3:
              if st.button("Save Team"):
-                 try: st.session_state['df1'] = pd.concat([st.session_state['df1'], my_team], axis=0)
-                 except: st.session_state['df1'] = my_team.copy()
+                st.session_state['lineups'] = pd.concat([st.session_state['lineups'], my_team], axis=0)
                 #  my_team.to_sql('My_Team', if_exists='append', con=get_conn(db_name), index=False)
-                 st.write(st.session_state['df1'])
-        # st.download_button(
-        #     "Press to Download",
-        #     convert_df_for_dl(df),
-        #     "file.csv",
-        #     "text/csv",
-        #     key='download-csv'
-        # )
+        
+        st.write(st.session_state['lineups'])
+        
 
 if __name__ == '__main__':
     main()
