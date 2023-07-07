@@ -8,6 +8,7 @@ import numpy as np
 import copy
 import sqlite3
 from zSim_Helper_Covar import FootballSimulation
+from supabase import create_client, Client
 
 year = 2022
 week = 2
@@ -191,6 +192,43 @@ class PullData:
 
         return player_data, covar, min_max
     
+#------------------
+# Write out Results
+#------------------
+
+# Initialize connection.
+# Uses st.cache_resource to only run once.
+@st.cache_resource
+def init_connection():
+    url = st.secrets["supabase_url"]
+    key = st.secrets["supabase_key"]
+    return create_client(url, key)
+
+
+# Perform query.
+# Uses st.cache_data to only rerun when the query changes or after 10 min.
+def run_query(supabase):
+    return supabase.table("results").select("*").execute()
+
+def format_df_upload(df):
+    df['id'] = 'AAAA'
+    df['created_at'] = pd.to_datetime('now')
+    df['user'] = 'test_user'
+    df['week'] = week
+    df['year'] = year   
+
+    return df.loc[~df.player.isnull(),['id', 'created_at', 'user', 'week', 'year', 'pos', 'player']]
+
+def upload_results(supabase, df):
+    upload = []
+    for _, row in df.iterrows():
+        cur_row = {}
+        for c in df.columns:
+            cur_row[c] = str(row[c])
+        upload.append(cur_row)
+
+    supabase.table('results').insert(upload).execute()
+
 
 #------------------
 # App Components
@@ -268,10 +306,11 @@ def create_plot(df):
 
 @st.cache_data
 def download_saved_teams():
+    return pd.DataFrame().to_csv().encode('utf-8')
     # conn = get_conn(db_name)
     # df = pd.read_sql_query('SELECT * FROM My_Team', conn)
     
-    return st.session_state['lineups'].to_csv(index=False).encode('utf-8')
+    # return st.session_state['lineups'].to_csv(index=False).encode('utf-8')
     # except: 
     #     st.write('No saved teams yet!')
     #     return pd.DataFrame().to_csv().encode('utf-8')
@@ -346,8 +385,6 @@ def team_fill(df, df2):
 def main():
     # Set page configuration
     st.set_page_config(layout="wide")
-    if 'lineups' not in st.session_state:
-        st.session_state['lineups'] = pd.DataFrame()
 
     st.title('🏈 Fantasy Football Lineup Optimizer')
     st.subheader('Hello Spider! 😎')
@@ -415,15 +452,16 @@ def main():
         subcol1, subcol2, subcol3 = st.columns(3)
         remaining_salary = 50000-my_team.salary.sum()
         subcol1.metric('Remaining Salary', remaining_salary)
+        
         if total_pos-len(my_team) > 0: subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
         else: subcol2.metric('Per Player', 'N/A')
         
         with subcol3:
              if st.button("Save Team"):
-                st.session_state['lineups'] = pd.concat([st.session_state['lineups'], my_team], axis=0)
-                #  my_team.to_sql('My_Team', if_exists='append', con=get_conn(db_name), index=False)
-        
-        st.write(st.session_state['lineups'])
+                 my_team_upload = format_df_upload(my_team)
+                 supabase = init_connection()
+                 upload_results(supabase, my_team_upload) 
+                 st.write(run_query(supabase))
         
 
 if __name__ == '__main__':
