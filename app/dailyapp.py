@@ -199,6 +199,14 @@ class PullData:
 # App Components
 #------------------
 
+def headings_text(name):
+            titl = st.title('🏈 Fantasy Football Lineup Optimizer')
+            subhead = st.subheader(f'Hello {name}! 😎')
+            text1 = st.write('Welcome to the Fantasy Football Lineup Optimizer! This app will help you choose the optimal lineup for your DraftKings fantasy football team.')
+            text2 = st.write('Follow the steps below to get started.')
+            text3 = st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
+            return titl, subhead, text1, text2, text3
+
 def get_display_data(player_data):
     
     display_data = player_data[['player', 'pos', 'salary', 'pred_fp_per_game']].sort_values(by='salary', ascending=False).reset_index(drop=True)
@@ -342,7 +350,7 @@ def pull_user_list(deta_key):
                                                     'name': user['name'], 
                                                     'password': user['password']
                                             }
-    st.write(credentials)
+   
     return credentials
 
 # @st.cache_data
@@ -392,16 +400,8 @@ def main():
         st.warning('Please enter your username and password')
 
     if authentication_status:
-        # Set page configuration
-
-        authenticator.logout('Logout', 'main')
-          
-        st.title('🏈 Fantasy Football Lineup Optimizer')
-        st.subheader(f'Hello {name}! 😎')
-        st.write('Welcome to the Fantasy Football Lineup Optimizer! This app will help you choose the optimal lineup for your DraftKings fantasy football team.')
-        st.write('Follow the steps below to get started.')
-        st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
-
+        
+        headings_text(name)
         col1, col2, col3 = st.columns([4, 3, 3])
         op_params = pull_op_params(db_name, week, year)
         pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
@@ -409,10 +409,10 @@ def main():
 
         with st.sidebar:
 
+            authenticator.logout('Logout', 'main')
             st.header('Simulation Parameters')
             st.write('Week:', week)
             st.write('Year:', year)
-
 
             if st.button("Refresh Data"):
                 st.cache_resource.clear()
@@ -429,10 +429,6 @@ def main():
         data_class = PullData(week, year, db_name, op_params)
         player_data, covar, min_max = data_class.pull_player_data()
         display_data = get_display_data(player_data)
-
-        # st.write(data_class.pred_vers, data_class.ensemble_vers, data_class.std_dev_type)
-        # st.write(data_class.covar_type, data_class.full_model_weight)
-        # st.write(sim.num_iters, sim.use_ownership, sim.salary_remain_max)
         
         sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
 
