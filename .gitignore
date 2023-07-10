@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+
+*users.py
+
 *secrets.toml
 # Distribution / packaging
 .Python
