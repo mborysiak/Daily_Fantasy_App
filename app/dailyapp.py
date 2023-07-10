@@ -1,7 +1,6 @@
 #%%
 import streamlit as st
 import pandas as pd
-from st_aggrid import GridOptionsBuilder, AgGrid, ColumnsAutoSizeMode
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,6 +16,8 @@ num_iters = 150
 
 total_lineups = 5
 db_name = 'Simulation_App.sqlite3'
+deta_key = st.secrets['deta_key']
+
 
 #-----------------
 # Pull Data In
@@ -192,75 +193,11 @@ class PullData:
         player_data = self.join_salary(player_data)
 
         return player_data, covar, min_max
-    
-#------------------
-# Write out Results
-#------------------
-
-# Initialize connection.
-# Uses st.cache_resource to only run once.
-@st.cache_resource
-def init_connection():
-    url = st.secrets["supabase_url"]
-    key = st.secrets["supabase_key"]
-    return create_client(url, key)
-
-
-# Perform query.
-# Uses st.cache_data to only rerun when the query changes or after 10 min.
-def run_query(supabase):
-    return supabase.table("results").select("*").execute()
-
-def format_df_upload(df):
-    df['id'] = 'AAAA'
-    df['created_at'] = pd.to_datetime('now')
-    df['user'] = 'test_user'
-    df['week'] = week
-    df['year'] = year   
-
-    return df.loc[~df.player.isnull(),['id', 'created_at', 'user', 'week', 'year', 'pos', 'player']]
-
-def upload_results(supabase, df):
-    upload = []
-    for _, row in df.iterrows():
-        cur_row = {}
-        for c in df.columns:
-            cur_row[c] = str(row[c])
-        upload.append(cur_row)
-
-    supabase.table('results').insert(upload).execute()
 
 
 #------------------
 # App Components
 #------------------
-
-# def create_interactive_grid(data):
-#     gb = GridOptionsBuilder.from_dataframe(data)
-#     # add pagination
-#     # gb.configure_pagination(paginationAutoPageSize=True)
-#     gb.configure_side_bar()
-#     gb.configure_selection('multiple', use_checkbox=True, groupSelectsChildren="Group checkbox select children") #Enable multi-row selection
-#     gb.configure_column('Include Player', editable=True, cellEditor='agSelectCellEditor', cellEditorParams={'values': ['Yes', 'No'] })
-#     gridOptions = gb.build()
-
-#     grid_response = AgGrid(
-#         data,
-#         gridOptions=gridOptions,
-#         data_return_mode='AS_INPUT', 
-#         update_mode='SELECTION_CHANGED', 
-#         columns_auto_size=ColumnsAutoSizeMode.FIT_CONTENTS,
-#         fit_columns_on_grid_load=True,
-#         height=500, 
-#         width='100%',
-#         reload_data=False
-#     )
-
-#     data = grid_response['data']
-#     selected = grid_response['selected_rows'] 
-#     df = pd.DataFrame(selected) 
-
-#     return df
 
 def get_display_data(player_data):
     
@@ -305,16 +242,18 @@ def create_plot(df):
     # Display the plot using Streamlit
     return st.write(ax.get_figure())
 
-@st.cache_data
-def download_saved_teams():
-    return pd.DataFrame().to_csv().encode('utf-8')
-    # conn = get_conn(db_name)
-    # df = pd.read_sql_query('SELECT * FROM My_Team', conn)
+def download_saved_teams(deta_key, week, year, username):
     
-    # return st.session_state['lineups'].to_csv(index=False).encode('utf-8')
-    # except: 
-    #     st.write('No saved teams yet!')
-    #     return pd.DataFrame().to_csv().encode('utf-8')
+    deta = deta_connect(deta_key)
+    db_results = deta.Base('resultsdb')
+
+    try:
+        results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items)    
+        return results.to_csv().encode('utf-8')
+    
+    except: 
+        st.write('No saved teams yet!')
+        return pd.DataFrame().to_csv().encode('utf-8')
     
 
 @st.cache_data
@@ -380,90 +319,159 @@ def team_fill(df, df2):
     return df[['Position', 'Player', 'Salary']]
 
 
-#--------------------------
+#--------------------
+# Deta operations
+#-------------------
 
+def deta_connect(deta_key):
+    return Deta(deta_key)
+
+# def insert_users(username, name, password):
+#     return db_users.put({'key': username, 'name': name, 'password': password})
+
+@st.cache_data
+def pull_user_list(deta_key):
+
+    deta = deta_connect(deta_key)
+    db_users = deta.Base('usersdb')
+    
+    users = db_users.fetch().items
+    credentials = {'usernames': {}}
+    for user in users:
+        credentials['usernames'][user['key']] = {
+                                                    'email': None, 
+                                                    'name': user['name'], 
+                                                    'password': user['password']
+                                            }
+    
+    return credentials
+
+# @st.cache_data
+def authenticate_user(credentials):
+
+    authenticator = stauth.Authenticate(credentials, 'daily_app', 'abcd1234', cookie_expiry_days=30)
+    name, authentication_status, username = authenticator.login('Login', 'main')
+
+    return name, authentication_status, username, authenticator
+
+#------------------
+# Write out Results
+#------------------
+
+def format_df_upload(df, username):
+    df['id'] = str(np.random.choice(range(1000000), size=1)[0])
+    df['created_at'] = str(pd.to_datetime('now'))
+    df['user'] = username
+    df['week'] = week
+    df['year'] = year   
+
+    return df.loc[~df.player.isnull(),['id', 'created_at', 'user', 'week', 'year', 'pos', 'player']]
+
+def upload_results(deta_key, df):
+    
+    deta = deta_connect(deta_key)
+    db_results = deta.Base('resultsdb')
+
+    for _, row in df.iterrows():
+        cur_row = {}
+        for c in df.columns:
+            cur_row[c] = row[c]
+        db_results.put(cur_row)
+
+    st.write('Lineup Saved')
 
 def main():
-    # Set page configuration
+    
     st.set_page_config(layout="wide")
 
-    st.title('🏈 Fantasy Football Lineup Optimizer')
-    st.subheader('Hello Spider! 😎')
-    st.write('Welcome to the Fantasy Football Lineup Optimizer! This app will help you choose the optimal lineup for your DraftKings fantasy football team.')
-    st.write('Follow the steps below to get started.')
-    st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
+    credentials = pull_user_list(deta_key)
+    name, authentication_status, username, authenticator = authenticate_user(credentials)
 
-    col1, col2, col3 = st.columns([4, 3, 3])
-    op_params = pull_op_params(db_name, week, year)
-    pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
-    team_display = init_my_team_df(pos_require_flex) 
+    if authentication_status == False:
+        st.error('Username/password is incorrect')
+    if authentication_status == None:
+        st.warning('Please enter your username and password')
 
-    with st.sidebar:
+    if authentication_status:
+        # Set page configuration
 
-        st.header('Simulation Parameters')
-        st.write('Week:', week)
-        st.write('Year:', year)
+        authenticator.logout('Logout', 'main')
+          
+        st.title('🏈 Fantasy Football Lineup Optimizer')
+        st.subheader(f'Hello {name}! 😎')
+        st.write('Welcome to the Fantasy Football Lineup Optimizer! This app will help you choose the optimal lineup for your DraftKings fantasy football team.')
+        st.write('Follow the steps below to get started.')
+        st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
+
+        col1, col2, col3 = st.columns([4, 3, 3])
+        op_params = pull_op_params(db_name, week, year)
+        pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
+        team_display = init_my_team_df(pos_require_flex) 
+
+        with st.sidebar:
+
+            st.header('Simulation Parameters')
+            st.write('Week:', week)
+            st.write('Year:', year)
 
 
-        if st.button("Refresh Data"):
-            st.cache_resource.clear()
-            op_params['New Data'] = True
+            if st.button("Refresh Data"):
+                st.cache_resource.clear()
+                op_params['New Data'] = True
 
-        st.download_button(
-                "Download Saved Teams",
-                download_saved_teams(),
-                f"week{week}_year{year}_saved_teams.csv",
-                "text/csv",
-                key='download-csv'
-            )
+            st.download_button(
+                    "Download Saved Teams",
+                    download_saved_teams(deta_key, week, year, username),
+                    f"week{week}_year{year}_saved_teams.csv",
+                    "text/csv",
+                    key='download-csv'
+                )
 
-    data_class = PullData(week, year, db_name, op_params)
-    player_data, covar, min_max = data_class.pull_player_data()
-    display_data = get_display_data(player_data)
+        data_class = PullData(week, year, db_name, op_params)
+        player_data, covar, min_max = data_class.pull_player_data()
+        display_data = get_display_data(player_data)
 
-    # st.write(data_class.pred_vers, data_class.ensemble_vers, data_class.std_dev_type)
-    # st.write(data_class.covar_type, data_class.full_model_weight)
-    # st.write(sim.num_iters, sim.use_ownership, sim.salary_remain_max)
-    
-    sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
-
-    with col1:
-        st.header('1. Choose Players')
-        st.write('*Check **my_team** box to select a player* ✅')
-
-        selected = create_interactive_grid(display_data)
-        my_team = selected.loc[selected.my_team==True]
-
-    results, team_cnts = run_sim(selected, sim, op_params)
-    results = results[results.SelectionCounts<100]
-    
-    with col2: 
-        st.header('2. Review Top Choices')
-        st.write('*These are the optimal players to choose from* ⬇️')
-
-        st.dataframe(results, use_container_width=True, height=500)
-
-    with col3:      
-        st.header("⚡:green[Your Team]⚡")  
-        st.write('*Players selected so far 🏈*')
+        # st.write(data_class.pred_vers, data_class.ensemble_vers, data_class.std_dev_type)
+        # st.write(data_class.covar_type, data_class.full_model_weight)
+        # st.write(sim.num_iters, sim.use_ownership, sim.salary_remain_max)
         
-        try: st.table(team_fill(team_display, my_team))
-        except: st.table(team_display)
+        sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
 
-        subcol1, subcol2, subcol3 = st.columns(3)
-        remaining_salary = 50000-my_team.salary.sum()
-        subcol1.metric('Remaining Salary', remaining_salary)
+        with col1:
+            st.header('1. Choose Players')
+            st.write('*Check **my_team** box to select a player* ✅')
+
+            selected = create_interactive_grid(display_data)
+            my_team = selected.loc[selected.my_team==True]
+
+        results, team_cnts = run_sim(selected, sim, op_params)
+        results = results[results.SelectionCounts<100]
         
-        if total_pos-len(my_team) > 0: subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
-        else: subcol2.metric('Per Player', 'N/A')
-        
-        with subcol3:
-             if st.button("Save Team"):
-                 my_team_upload = format_df_upload(my_team)
-                 supabase = init_connection()
-                 upload_results(supabase, my_team_upload) 
-                 st.write(run_query(supabase))
-        
+        with col2: 
+            st.header('2. Review Top Choices')
+            st.write('*These are the optimal players to choose from* ⬇️')
+
+            st.dataframe(results, use_container_width=True, height=500)
+
+        with col3:      
+            st.header("⚡:green[Your Team]⚡")  
+            st.write('*Players selected so far 🏈*')
+            
+            try: st.table(team_fill(team_display, my_team))
+            except: st.table(team_display)
+
+            subcol1, subcol2, subcol3 = st.columns(3)
+            remaining_salary = 50000-my_team.salary.sum()
+            subcol1.metric('Remaining Salary', remaining_salary)
+            
+            if total_pos-len(my_team) > 0: subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
+            else: subcol2.metric('Per Player', 'N/A')
+            
+            with subcol3:
+                if st.button("Save Team"):
+                    my_team_upload = format_df_upload(my_team, username)
+                    upload_results(deta_key, my_team_upload) 
+            
 
 if __name__ == '__main__':
     main()
