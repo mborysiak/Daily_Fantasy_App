@@ -329,7 +329,6 @@ def deta_connect(deta_key):
 # def insert_users(username, name, password):
 #     return db_users.put({'key': username, 'name': name, 'password': password})
 
-@st.cache_data
 def pull_user_list(deta_key):
 
     deta = deta_connect(deta_key)
@@ -343,7 +342,7 @@ def pull_user_list(deta_key):
                                                     'name': user['name'], 
                                                     'password': user['password']
                                             }
-    
+    st.write(credentials)
     return credentials
 
 # @st.cache_data
