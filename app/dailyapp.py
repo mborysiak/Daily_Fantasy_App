@@ -353,7 +353,30 @@ def pull_user_list(deta_key):
    
     return credentials
 
-# @st.cache_data
+def signup_new_user(deta_key):
+    
+    deta = deta_connect(deta_key)
+    db_users = deta.Base('usersdb')
+    existing_users = [ex_user['key'] for ex_user in db_users.fetch().items]
+
+    st.subheader("Sign Up")
+    new_username = st.text_input("New Username")
+    new_password = st.text_input("New Password", type="password")
+    new_password = stauth.Hasher([new_password]).generate()[0]
+
+    if st.button("Sign Up"):
+        if not new_username or not new_password:
+            st.error("Please provide a username and password.")
+        else:
+            # Check if the username already exists
+            if new_username in existing_users:
+                st.error("Username already exists. Please choose a different one.")
+            else:
+                # Save the new user in the database
+                db_users.put({'key': new_username, 'name': new_username, 'password': new_password})
+                st.success("Sign up successful! You can now log in.")
+
+
 def authenticate_user(credentials):
 
     authenticator = stauth.Authenticate(credentials, 'daily_app', 'abcd1234', cookie_expiry_days=30)
@@ -391,82 +414,93 @@ def main():
     
     st.set_page_config(layout="wide")
 
-    credentials = pull_user_list(deta_key)
-    name, authentication_status, username, authenticator = authenticate_user(credentials)
-
-    if authentication_status == False:
-        st.error('Username/password is incorrect')
-    if authentication_status == None:
-        st.warning('Please enter your username and password')
-
-    if authentication_status:
+    menu = ['SignUp', 'Login']
+    with st.sidebar:
+        st.header('User Authentication')
+        choice = st.radio("Menu", menu, label_visibility='collapsed')
         
-        headings_text(name)
-        col1, col2, col3 = st.columns([4, 3, 3])
-        op_params = pull_op_params(db_name, week, year)
-        pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
-        team_display = init_my_team_df(pos_require_flex) 
-
-        with st.sidebar:
-
-            authenticator.logout('Logout', 'main')
-            st.header('Simulation Parameters')
-            st.write('Week:', week)
-            st.write('Year:', year)
-
-            if st.button("Refresh Data"):
-                st.cache_resource.clear()
-                op_params['New Data'] = True
-
-            st.download_button(
-                    "Download Saved Teams",
-                    download_saved_teams(deta_key, week, year, username),
-                    f"week{week}_year{year}_saved_teams.csv",
-                    "text/csv",
-                    key='download-csv'
-                )
-
-        data_class = PullData(week, year, db_name, op_params)
-        player_data, covar, min_max = data_class.pull_player_data()
-        display_data = get_display_data(player_data)
+    if choice == "SignUp":
+        signup_new_user(deta_key)
+    
+    elif choice == 'Login':
         
-        sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
+        credentials = pull_user_list(deta_key)
+        name, authentication_status, username, authenticator = authenticate_user(credentials)
 
-        with col1:
-            st.header('1. Choose Players')
-            st.write('*Check **my_team** box to select a player* ✅')
+        if authentication_status == False:
+            st.error('Username/password is incorrect')
+        if authentication_status == None:
+            st.warning('Please enter your username and password')
 
-            selected = create_interactive_grid(display_data)
-            my_team = selected.loc[selected.my_team==True]
+        if authentication_status:
+            choice = None
+            menu = []
+            headings_text(name)
+            col1, col2, col3 = st.columns([4, 3, 3])
+            op_params = pull_op_params(db_name, week, year)
+            pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
+            team_display = init_my_team_df(pos_require_flex) 
 
-        results, team_cnts = run_sim(selected, sim, op_params)
-        results = results[results.SelectionCounts<100]
-        
-        with col2: 
-            st.header('2. Review Top Choices')
-            st.write('*These are the optimal players to choose from* ⬇️')
+            with st.sidebar:
+                authenticator.logout('Logout', 'main')
+                        
+                st.header('Simulation Parameters')
+                st.write('Week:', week)
+                st.write('Year:', year)
 
-            st.dataframe(results, use_container_width=True, height=500)
+                if st.button("Refresh Data"):
+                    st.cache_resource.clear()
+                    op_params['New Data'] = True
 
-        with col3:      
-            st.header("⚡:green[Your Team]⚡")  
-            st.write('*Players selected so far 🏈*')
+                st.download_button(
+                        "Download Saved Teams",
+                        download_saved_teams(deta_key, week, year, username),
+                        f"week{week}_year{year}_saved_teams.csv",
+                        "text/csv",
+                        key='download-csv'
+                    )
+
+            data_class = PullData(week, year, db_name, op_params)
+            player_data, covar, min_max = data_class.pull_player_data()
+            display_data = get_display_data(player_data)
             
-            try: st.table(team_fill(team_display, my_team))
-            except: st.table(team_display)
+            sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
 
-            subcol1, subcol2, subcol3 = st.columns(3)
-            remaining_salary = 50000-my_team.salary.sum()
-            subcol1.metric('Remaining Salary', remaining_salary)
+            with col1:
+                st.header('1. Choose Players')
+                st.write('*Check **my_team** box to select a player* ✅')
+
+                selected = create_interactive_grid(display_data)
+                my_team = selected.loc[selected.my_team==True]
+
+            results, team_cnts = run_sim(selected, sim, op_params)
+            results = results[results.SelectionCounts<100]
             
-            if total_pos-len(my_team) > 0: subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
-            else: subcol2.metric('Per Player', 'N/A')
-            
-            with subcol3:
-                if st.button("Save Team"):
-                    my_team_upload = format_df_upload(my_team, username)
-                    upload_results(deta_key, my_team_upload) 
-            
+            with col2: 
+                st.header('2. Review Top Choices')
+                st.write('*These are the optimal players to choose from* ⬇️')
+
+                st.dataframe(results, use_container_width=True, height=500)
+
+            with col3:      
+                st.header("⚡:green[Your Team]⚡")  
+                st.write('*Players selected so far 🏈*')
+                
+                try: st.table(team_fill(team_display, my_team))
+                except: st.table(team_display)
+
+                subcol1, subcol2, subcol3 = st.columns(3)
+                remaining_salary = 50000-my_team.salary.sum()
+                subcol1.metric('Remaining Salary', remaining_salary)
+                
+                if total_pos-len(my_team) > 0: subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
+                else: subcol2.metric('Per Player', 'N/A')
+                
+                with subcol3:
+                    if st.button("Save Team"):
+                        my_team_upload = format_df_upload(my_team, username)
+                        upload_results(deta_key, my_team_upload) 
+                        st.text('Team Saved!')
 
 if __name__ == '__main__':
     main()
