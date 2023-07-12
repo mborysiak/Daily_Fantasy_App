@@ -479,10 +479,10 @@ def main():
                         
                 st.header('Simulation Parameters')
                 if st.button("Refresh Data"):
-                    PullData.clear()
-                    extract_params.clear()
-                    init_sim.clear()
                     pull_op_params.clear()
+                    PullData.clear()
+                    init_sim.clear()
+                    extract_params.clear()
 
                 st.write('Week:', week)
                 st.write('Year:', year)
