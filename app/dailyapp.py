@@ -19,6 +19,61 @@ db_name = 'Simulation_App.sqlite3'
 deta_key = st.secrets['deta_key']
 
 
+#--------------------
+# Deta operations
+#-------------------
+
+def deta_connect(deta_key):
+    return Deta(deta_key)
+
+def pull_user_list(deta_key):
+
+    deta = deta_connect(deta_key)
+    db_users = deta.Base('usersdb')
+    
+    users = db_users.fetch().items
+    credentials = {'usernames': {}}
+    for user in users:
+        credentials['usernames'][user['key']] = {
+                                                    'email': None, 
+                                                    'name': user['name'], 
+                                                    'password': user['password']
+                                            }
+   
+    return credentials
+
+def signup_new_user(deta_key):
+    
+    deta = deta_connect(deta_key)
+    db_users = deta.Base('usersdb')
+    existing_users = [ex_user['key'] for ex_user in db_users.fetch().items]
+
+    st.subheader("Sign Up")
+    new_username = st.text_input("New Username")
+    new_password = st.text_input("New Password", type="password")
+    new_password = stauth.Hasher([new_password]).generate()[0]
+
+    if st.button("Sign Up"):
+        if not new_username or not new_password:
+            st.error("Please provide a username and password.")
+        else:
+            # Check if the username already exists
+            if new_username in existing_users:
+                st.error("Username already exists. Please choose a different one.")
+            else:
+                # Save the new user in the database
+                db_users.put({'key': new_username, 'name': new_username, 'password': new_password})
+                st.success("Sign up successful! You can now log in by clicking Login in the sidebar.")
+
+
+def authenticate_user(credentials):
+
+    authenticator = stauth.Authenticate(credentials, 'daily_app', 'abcd1234', cookie_expiry_days=30)
+    name, authentication_status, username = authenticator.login('Login', 'main')
+
+    return name, authentication_status, username, authenticator
+
+
 #-----------------
 # Pull Data In
 #-----------------
@@ -72,6 +127,8 @@ class PullData:
         else: self.use_covar = True
 
         self.ownership = self.pull_ownership()
+
+        st.write(self.full_model_weight, self.covar_type)
 
     def pull_ownership(self):
         conn = get_conn(self.filename)
@@ -200,12 +257,12 @@ class PullData:
 #------------------
 
 def headings_text(name):
-            titl = st.title('🏈 Fantasy Football Lineup Optimizer')
-            subhead = st.subheader(f'Hello {name}! 😎')
-            text1 = st.write('Welcome to the Fantasy Football Lineup Optimizer! This app will help you choose the optimal lineup for your DraftKings fantasy football team.')
-            text2 = st.write('Follow the steps below to get started.')
-            text3 = st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
-            return titl, subhead, text1, text2, text3
+    titl = st.title('🏈 Fantasy Football Lineup Optimizer')
+    subhead = st.subheader(f'Hello {name}! 😎')
+    text1 = st.write('Welcome to the Fantasy Football Lineup Optimizer! This app will help you choose the optimal lineup for your DraftKings fantasy football team.')
+    text2 = st.write('Follow the steps below to get started.')
+    text3 = st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
+    return titl, subhead, text1, text2, text3
 
 def get_display_data(player_data):
     
@@ -276,14 +333,54 @@ def init_sim(player_data, covar, min_max, use_covar, op_params, pos_require_star
                              salary_remain_max=salary_remain_max, db_name=db_name)
     return sim
 
+@st.cache_data
+def extract_params(op_params):
 
-def run_sim(df, sim, op_params):
+    ownership_vers = op_params['ownership_vers']
+    adjust_pos_counts = eval(op_params['adjust_pos_counts'])
+    matchup_drop = eval(op_params['matchup_drop'])
+    max_team_type = eval(op_params['max_team_type'])
+    min_player_same_team = eval(op_params['min_player_same_team'])
+    min_player_opp_team = eval(op_params['min_players_opp_team'])
+    num_top_players = eval(op_params['num_top_players'])
+    own_neg_frac = eval(op_params['own_neg_frac'])
+    player_drop_multiple = eval(op_params['player_drop_multiple'])
+    qb_min_iter = eval(op_params['qb_min_iter'])
+    qb_set_max_team = eval(op_params['qb_set_max_team'])
+    qb_solo_start = eval(op_params['qb_solo_start'])
+    static_top_players = eval(op_params['static_top_players'])
+
+    try: min_player_opp_team = int(min_player_opp_team)
+    except: pass
+    try:min_player_same_team = int(min_player_same_team)
+    except: pass
+
+    return ownership_vers, adjust_pos_counts, matchup_drop, max_team_type, min_player_same_team, min_player_opp_team, num_top_players, own_neg_frac, player_drop_multiple, qb_min_iter, qb_set_max_team, qb_solo_start, static_top_players
+
+
+def run_sim(df, sim, op_params, stack_team):
     to_add = list(df[df.my_team==True].player.values)
     to_drop = list(df[df.exclude==True].player.values)
-    min_player_same_team_input = 2
-    set_max_team = None
-    results, team_cnts = sim.run_sim(to_add, to_drop, min_player_same_team_input, set_max_team,
-                                        ownership_vers='mil_only')
+
+    ownership_vers, adjust_pos_counts, matchup_drop, max_team_type, \
+    min_player_same_team, min_player_opp_team, num_top_players, own_neg_frac,  \
+    player_drop_multiple, qb_min_iter, qb_set_max_team, qb_solo_start, static_top_players = extract_params(op_params)
+    
+    if stack_team == 'Auto': 
+        set_max_team = None
+    else: 
+        set_max_team = stack_team
+        qb_set_max_team = False
+        matchup_drop = 0
+        qb_min_iter = 9
+
+    st.write(set_max_team, adjust_pos_counts, matchup_drop, min_player_opp_team, min_player_same_team)
+
+    results, team_cnts = sim.run_sim(to_add, to_drop, min_players_same_team_input=min_player_same_team, set_max_team=set_max_team, 
+                                    min_players_opp_team_input=min_player_opp_team, adjust_select=adjust_pos_counts, 
+                                    max_team_type=max_team_type, num_matchup_drop=matchup_drop, own_neg_frac=own_neg_frac, 
+                                    n_top_players=num_top_players, ownership_vers=ownership_vers, static_top_players=static_top_players, 
+                                    qb_min_iter=qb_min_iter, qb_set_max_team=qb_set_max_team, qb_solo_start=qb_solo_start)
     return results, team_cnts
 
 
@@ -326,63 +423,6 @@ def team_fill(df, df2):
 
     return df[['Position', 'Player', 'Salary']]
 
-
-#--------------------
-# Deta operations
-#-------------------
-
-def deta_connect(deta_key):
-    return Deta(deta_key)
-
-# def insert_users(username, name, password):
-#     return db_users.put({'key': username, 'name': name, 'password': password})
-
-def pull_user_list(deta_key):
-
-    deta = deta_connect(deta_key)
-    db_users = deta.Base('usersdb')
-    
-    users = db_users.fetch().items
-    credentials = {'usernames': {}}
-    for user in users:
-        credentials['usernames'][user['key']] = {
-                                                    'email': None, 
-                                                    'name': user['name'], 
-                                                    'password': user['password']
-                                            }
-   
-    return credentials
-
-def signup_new_user(deta_key):
-    
-    deta = deta_connect(deta_key)
-    db_users = deta.Base('usersdb')
-    existing_users = [ex_user['key'] for ex_user in db_users.fetch().items]
-
-    st.subheader("Sign Up")
-    new_username = st.text_input("New Username")
-    new_password = st.text_input("New Password", type="password")
-    new_password = stauth.Hasher([new_password]).generate()[0]
-
-    if st.button("Sign Up"):
-        if not new_username or not new_password:
-            st.error("Please provide a username and password.")
-        else:
-            # Check if the username already exists
-            if new_username in existing_users:
-                st.error("Username already exists. Please choose a different one.")
-            else:
-                # Save the new user in the database
-                db_users.put({'key': new_username, 'name': new_username, 'password': new_password})
-                st.success("Sign up successful! You can now log in.")
-
-
-def authenticate_user(credentials):
-
-    authenticator = stauth.Authenticate(credentials, 'daily_app', 'abcd1234', cookie_expiry_days=30)
-    name, authentication_status, username = authenticator.login('Login', 'main')
-
-    return name, authentication_status, username, authenticator
 
 #------------------
 # Write out Results
@@ -433,24 +473,32 @@ def main():
             st.warning('Please enter your username and password')
 
         if authentication_status:
-            choice = None
-            menu = []
-            headings_text(name)
-            col1, col2, col3 = st.columns([4, 3, 3])
-            op_params = pull_op_params(db_name, week, year)
-            pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
-            team_display = init_my_team_df(pos_require_flex) 
 
             with st.sidebar:
                 authenticator.logout('Logout', 'main')
                         
                 st.header('Simulation Parameters')
+                if st.button("Refresh Data"):
+                    PullData.clear()
+                    extract_params.clear()
+                    init_sim.clear()
+                    pull_op_params.clear()
+
                 st.write('Week:', week)
                 st.write('Year:', year)
-
-                if st.button("Refresh Data"):
-                    st.cache_resource.clear()
-                    op_params['New Data'] = True
+            
+            headings_text(name)
+            col1, col2, col3 = st.columns([4, 3, 3])
+            
+            op_params = pull_op_params(db_name, week, year)
+            pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
+            
+            team_display = init_my_team_df(pos_require_flex) 
+            data_class = PullData(week, year, db_name, op_params)
+            player_data, covar, min_max = data_class.pull_player_data()
+            
+            with st.sidebar:
+                stack_team = st.selectbox('Stack Team', ['Auto']+sorted(list(player_data.team.unique())))
 
                 st.download_button(
                         "Download Saved Teams",
@@ -459,21 +507,17 @@ def main():
                         "text/csv",
                         key='download-csv'
                     )
-
-            data_class = PullData(week, year, db_name, op_params)
-            player_data, covar, min_max = data_class.pull_player_data()
-            display_data = get_display_data(player_data)
             
+            display_data = get_display_data(player_data)
             sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
 
             with col1:
                 st.header('1. Choose Players')
                 st.write('*Check **my_team** box to select a player* ✅')
-
                 selected = create_interactive_grid(display_data)
                 my_team = selected.loc[selected.my_team==True]
 
-            results, team_cnts = run_sim(selected, sim, op_params)
+            results, team_cnts = run_sim(selected, sim, op_params, stack_team)
             results = results[results.SelectionCounts<100]
             
             with col2: 
