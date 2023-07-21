@@ -300,26 +300,6 @@ def create_interactive_grid(data):
         )
     return selected
 
-def create_plot(df):
-    # Create a plot
-    ax = df[['player', 'dk_salary']].set_index('player').plot(kind='barh')
-
-    # Display the plot using Streamlit
-    return st.write(ax.get_figure())
-
-def download_saved_teams(deta_key, week, year, username):
-    
-    deta = deta_connect(deta_key)
-    db_results = deta.Base('resultsdb')
-
-    try:
-        results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items)    
-        return results.to_csv().encode('utf-8')
-    
-    except: 
-        st.write('No saved teams yet!')
-        return pd.DataFrame().to_csv().encode('utf-8')
-    
 
 @st.cache_data
 def init_sim(player_data, covar, min_max, use_covar, op_params, pos_require_start):
@@ -450,6 +430,67 @@ def upload_results(deta_key, df):
 
     st.write('Lineup Saved')
 
+def create_database_output(my_team, filename, week, year):
+
+    conn = get_conn(filename)
+    ids = pd.read_sql_query(f"SELECT * FROM Player_Ids WHERE year={year} AND week={week}", conn)
+    my_team_ids = my_team.rename(columns={'Player': 'player'}).copy()
+    dk_output = pd.merge(my_team_ids, ids, on='player')
+
+    for pstn, num_req in zip(['WR', 'RB', 'TE'], [4, 3, 2]):
+        if len(dk_output[dk_output.pos == pstn]) == num_req:
+            idx_last = dk_output[dk_output.pos == pstn].index[-1]
+            dk_output.loc[dk_output.index==idx_last, 'pos'] = 'FLEX'
+
+    pos_map = {
+        'QB': 'aQB', 
+        'RB': 'bRB',
+        'WR': 'cWR',
+        'TE': 'dTE',
+        'FLEX': 'eFLEX',
+        'DST': 'fDST'
+    }
+    dk_output.pos = dk_output.pos.map(pos_map)
+    dk_output = dk_output.sort_values(by='pos').reset_index(drop=True)
+    pos_map_rev = {v: k for k,v in pos_map.items()}
+    dk_output.pos = dk_output.pos.map(pos_map_rev)
+
+    dk_output_ids = dk_output[['pos', 'player_id']].T.reset_index(drop=True)
+    dk_output_players = dk_output[['pos', 'player']].T.reset_index(drop=True)
+    dk_output = pd.concat([dk_output_players, dk_output_ids], axis=1)
+
+    dk_output.columns = range(dk_output.shape[1])
+    dk_output = pd.DataFrame(dk_output.iloc[1,:]).T
+
+    return dk_output
+
+
+def download_saved_teams(deta_key, filename, week, year, username):
+    
+    try:
+
+        deta = deta_connect(deta_key)
+        db_results = deta.Base('resultsdb')
+        results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items) 
+        
+        save_result = pd.DataFrame()
+        for r in results['id'].unique():
+            print(r)
+            cur_result = create_database_output(results[results.id==r], filename, week, year)
+            save_result = pd.concat([save_result, cur_result], axis=0)
+
+    
+        return save_result.to_csv().encode('utf-8')
+    
+    except:
+    
+        st.write('No saved teams yet!')
+        return pd.DataFrame().to_csv().encode('utf-8')
+
+#======================
+# Run the App
+#======================
+
 def main():
     
     st.set_page_config(layout="wide")
@@ -502,7 +543,7 @@ def main():
 
                 st.download_button(
                         "Download Saved Teams",
-                        download_saved_teams(deta_key, week, year, username),
+                        download_saved_teams(deta_key, db_name, week, year, username),
                         f"week{week}_year{year}_saved_teams.csv",
                         "text/csv",
                         key='download-csv'
