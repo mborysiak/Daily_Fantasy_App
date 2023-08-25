@@ -190,14 +190,14 @@ def init_sim(_conn, op_params, week, year, pos_require_start):
 
     num_iters = eval(op_params['num_iters'])
     use_ownership = eval(op_params['use_ownership'])
-    salary_remain_max = eval(op_params['max_salary_remain'])
+    max_salary_remain = eval(op_params['max_salary_remain'])
     matchup_seed = eval(op_params['matchup_seed'])
 
-    sim = FootballSimulation(_conn, week, year, salary_cap=50000, pos_require_start=pos_require_start, num_iters=50, 
+    sim = FootballSimulation(_conn, week, year, salary_cap=50000, pos_require_start=pos_require_start, num_iters=num_iters, 
                              pred_vers=pred_vers, reg_ens_vers=reg_ens_vers, million_ens_vers=million_ens_vers,
                              std_dev_type=std_dev_type, covar_type=covar_type, full_model_rel_weight=full_model_weight, 
                              matchup_seed=matchup_seed, use_covar=use_covar, use_ownership=use_ownership, 
-                             salary_remain_max=salary_remain_max)
+                             salary_remain_max=max_salary_remain)
 
     return sim, sim.player_data
 
@@ -217,22 +217,26 @@ def extract_params(op_params):
     qb_set_max_team = eval(op_params['qb_set_max_team'])
     qb_solo_start = eval(op_params['qb_solo_start'])
     static_top_players = eval(op_params['static_top_players'])
+    num_avg_pts = eval(op_params['num_avg_pts'])
 
     try: min_player_opp_team = int(min_player_opp_team)
     except: pass
     try:min_player_same_team = int(min_player_same_team)
     except: pass
 
-    return ownership_vers, adjust_pos_counts, matchup_drop, max_team_type, min_player_same_team, min_player_opp_team, num_top_players, own_neg_frac, player_drop_multiple, qb_min_iter, qb_set_max_team, qb_solo_start, static_top_players
+    return (ownership_vers, adjust_pos_counts, matchup_drop, max_team_type, min_player_same_team, min_player_opp_team, 
+            num_top_players, own_neg_frac, player_drop_multiple, qb_min_iter, qb_set_max_team, qb_solo_start, 
+            static_top_players, num_avg_pts)
 
 
 def run_sim(df, _conn, sim, op_params, stack_team):
     to_add = list(df[df.my_team==True].player.values)
     to_drop = list(df[df.exclude==True].player.values)
 
-    ownership_vers, adjust_pos_counts, matchup_drop, max_team_type, \
-    min_player_same_team, min_player_opp_team, num_top_players, own_neg_frac,  \
-    player_drop_multiple, qb_min_iter, qb_set_max_team, qb_solo_start, static_top_players = extract_params(op_params)
+    (ownership_vers, adjust_pos_counts, matchup_drop, max_team_type,
+    min_player_same_team, min_player_opp_team, num_top_players, own_neg_frac,
+    player_drop_multiple, qb_min_iter, qb_set_max_team, qb_solo_start, 
+    static_top_players, num_avg_pts) = extract_params(op_params)
     
     if stack_team == 'Auto': 
         set_max_team = None
@@ -258,7 +262,8 @@ def run_sim(df, _conn, sim, op_params, stack_team):
                                      min_players_opp_team_input=min_player_opp_team, adjust_select=adjust_pos_counts, 
                                      max_team_type=max_team_type, num_matchup_drop=matchup_drop, own_neg_frac=own_neg_frac, 
                                      n_top_players=num_top_players, ownership_vers=ownership_vers, static_top_players=static_top_players, 
-                                     qb_min_iter=qb_min_iter, qb_set_max_team=qb_set_max_team, qb_solo_start=qb_solo_start)
+                                     qb_min_iter=qb_min_iter, qb_set_max_team=qb_set_max_team, qb_solo_start=qb_solo_start,
+                                     num_avg_pts=num_avg_pts)
     return results, team_cnts
 
     
@@ -341,8 +346,6 @@ def upload_results(deta_key, df):
         for c in df.columns:
             cur_row[c] = row[c]
         db_results.put(cur_row)
-
-    st.write('Lineup Saved')
 
 def create_database_output(my_team, filename, week, year):
 
@@ -461,8 +464,6 @@ def main():
             with col1:
                 st.header('1. Choose Players')
                 st.write('*Check **my_team** box to select a player* ✅')
-                
-                # st.write(st.session_state["dd"].head(10))
                 selected = update_interactive_grid(st.session_state["dd"])
             
             with st.sidebar:
@@ -489,7 +490,6 @@ def main():
             with col2: 
                 st.header('2. Review Top Choices')
                 st.write('*These are the optimal players to choose from* ⬇️')
-
                 st.dataframe(results, use_container_width=True, height=500)
 
             with col3:      
