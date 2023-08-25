@@ -246,17 +246,24 @@ def run_sim(df, _conn, sim, op_params, stack_team):
         matchup_drop = 0
         qb_min_iter = 9
 
-    # st.write('covar_type:', sim.covar_type,
-    #          'model_weight:', sim.full_model_rel_weight,
-    #          '/nset_max_team:', set_max_team, 
-    #          'adjust_pos_counts:', adjust_pos_counts, 
-    #          'matchup_drop:', matchup_drop, 
-    #          'min_player_opp_team:', min_player_opp_team, 
-    #          'min_player_same_team:', min_player_same_team,
-    #          'qb_min_iter:', qb_min_iter,
-    #          'qb_set_max_team:', qb_set_max_team,
-    #          'qb_solo_start:', qb_solo_start
-    #          )
+    with st.sidebar:
+        st.header('Show Run Parameters')
+        if st.button('Show Params'):
+            st.write('pred_vers', sim.pred_vers)
+            st.write('reg_ens_vers', sim.reg_ens_vers)
+            st.write('million_ens_vers', sim.million_ens_vers)
+            st.write('std_dev_type:', sim.std_dev_type)
+            st.write('full_model_rel_weight:', sim.full_model_rel_weight)
+            st.write('covar_type:', sim.covar_type)
+            st.write('set_max_team:', set_max_team)
+            st.write('adjust_pos_counts:', adjust_pos_counts)
+            st.write('matchup_drop:', matchup_drop)
+            st.write('min_player_opp_team:', min_player_opp_team)
+            st.write('min_player_same_team:', min_player_same_team)
+            st.write('qb_min_iter:', qb_min_iter)
+            st.write('qb_set_max_team:', qb_set_max_team)
+            st.write('qb_solo_start:', qb_solo_start)
+                    
 
     results, team_cnts = sim.run_sim(_conn, to_add, to_drop, min_players_same_team_input=min_player_same_team, set_max_team=set_max_team, 
                                      min_players_opp_team_input=min_player_opp_team, adjust_select=adjust_pos_counts, 
@@ -490,7 +497,24 @@ def main():
             with col2: 
                 st.header('2. Review Top Choices')
                 st.write('*These are the optimal players to choose from* ⬇️')
-                st.dataframe(results, use_container_width=True, height=500)
+
+                
+                st.data_editor(
+                    results,
+                    column_config={
+                        "SelectionCounts": st.column_config.ProgressColumn(
+                            "SelectionCounts",
+                            help="Percent of selections in best lineup",
+                            format="%.1f",
+                            min_value=0,
+                            max_value=100,
+                        ),
+                    },
+                    hide_index=True,
+                    height=500,
+                    use_container_width=True
+                )
+                # st.dataframe(results, use_container_width=True, height=500)
 
             with col3:      
                 st.header("⚡:green[Your Team]⚡")  
