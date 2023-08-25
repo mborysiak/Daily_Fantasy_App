@@ -12,7 +12,6 @@ from deta import Deta
 
 year = 2022
 week = 2
-num_iters = 150
 
 total_lineups = 5
 db_name = 'Simulation_App.sqlite3'
@@ -194,7 +193,7 @@ def init_sim(_conn, op_params, week, year, pos_require_start):
     salary_remain_max = eval(op_params['max_salary_remain'])
     matchup_seed = eval(op_params['matchup_seed'])
 
-    sim = FootballSimulation(_conn, week, year, salary_cap=50000, pos_require_start=pos_require_start, num_iters=num_iters, 
+    sim = FootballSimulation(_conn, week, year, salary_cap=50000, pos_require_start=pos_require_start, num_iters=50, 
                              pred_vers=pred_vers, reg_ens_vers=reg_ens_vers, million_ens_vers=million_ens_vers,
                              std_dev_type=std_dev_type, covar_type=covar_type, full_model_rel_weight=full_model_weight, 
                              matchup_seed=matchup_seed, use_covar=use_covar, use_ownership=use_ownership, 
@@ -443,7 +442,6 @@ def main():
             display_data = get_display_data(player_data, deta_key, week, year, username)
             if "dd" not in st.session_state: 
                 st.session_state["dd"] = display_data
-                st.session_state["dd_edited"] = st.session_state["dd"]
 
             with st.sidebar:
                 authenticator.logout('Logout', 'main')
@@ -460,10 +458,6 @@ def main():
                 st.write('Year:', year)
                 stack_team = st.selectbox('Stack Team', ['Auto']+sorted(list(player_data.team.unique())))
 
-                st.header('Auto Fill Current Team')
-                if st.button("Auto Select"):
-                    st.session_state["dd"] = auto_select(st.session_state["dd"], conn, sim, op_params, stack_team)
-
                 st.header('CSV for Draftkings')
                 st.download_button(
                         "Download Saved Teams",
@@ -475,17 +469,20 @@ def main():
             
             with col1:
                 st.header('1. Choose Players')
-                st.write('*Check **my_team** box to select a player* ✅')
+                st.write('*Check **my_team** box to select a player* ✅ or click Auto Select to fill in team')
                 
                 # st.write(st.session_state["dd"].head(10))
                 selected = update_interactive_grid(st.session_state["dd"])
-                my_team = selected.loc[selected.my_team==True]
-                # st.write(st.session_state["dd"].head(10))
+            
+                if st.button("Auto Select"):
+                    st.session_state["dd"] = auto_select(selected, conn, sim, op_params, stack_team)
+                    my_team = st.session_state["dd"].loc[st.session_state["dd"].my_team==True]
 
+                else:
+                    my_team = selected.loc[selected.my_team==True]
+            
             results, team_cnts = run_sim(selected, conn, sim, op_params, stack_team)
             results = results[results.SelectionCounts<100]
-            st.session_state["dd"] = selected.copy()
-            st.write(st.session_state["dd"].head(10))
 
             with col2: 
                 st.header('2. Review Top Choices')
