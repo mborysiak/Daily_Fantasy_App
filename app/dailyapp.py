@@ -457,6 +457,19 @@ def main():
                 st.write('Week:', week)
                 st.write('Year:', year)
                 stack_team = st.selectbox('Stack Team', ['Auto']+sorted(list(player_data.team.unique())))
+            
+            with col1:
+                st.header('1. Choose Players')
+                st.write('*Check **my_team** box to select a player* ✅')
+                
+                # st.write(st.session_state["dd"].head(10))
+                selected = update_interactive_grid(st.session_state["dd"])
+            
+            with st.sidebar:
+                st.header('Auto Fill Current Team')
+                if st.button("Auto Select"):
+                    st.session_state["dd"] = auto_select(selected, conn, sim, op_params, stack_team)
+                    my_team = st.session_state["dd"].loc[st.session_state["dd"].my_team==True]
 
                 st.header('CSV for Draftkings')
                 st.download_button(
@@ -466,20 +479,9 @@ def main():
                         "text/csv",
                         key='download-csv'
                 )
-            
-            with col1:
-                st.header('1. Choose Players')
-                st.write('*Check **my_team** box to select a player* ✅ or click Auto Select to fill in team')
-                
-                # st.write(st.session_state["dd"].head(10))
-                selected = update_interactive_grid(st.session_state["dd"])
-            
-                if st.button("Auto Select"):
-                    st.session_state["dd"] = auto_select(selected, conn, sim, op_params, stack_team)
-                    my_team = st.session_state["dd"].loc[st.session_state["dd"].my_team==True]
 
-                else:
-                    my_team = selected.loc[selected.my_team==True]
+            with col1:
+                my_team = selected.loc[selected.my_team==True]
             
             results, team_cnts = run_sim(selected, conn, sim, op_params, stack_team)
             results = results[results.SelectionCounts<100]
