@@ -17,24 +17,42 @@ cvxopt.glpk.options['msg_lev'] = 'GLP_MSG_OFF'
 
 class FootballSimulation:
 
-    def __init__(self, player_data, covar, min_max, week, set_year, salary_cap, 
-                 pos_require_start, num_iters, matchup_seed=False, use_covar=True, 
-                 use_ownership=0, salary_remain_max=None, db_name='Simulation_App'):
+    def __init__(self, conn, week, set_year, salary_cap, pos_require_start, num_iters, 
+                 pred_vers='standard', reg_ens_vers='no_weight', million_ens_vers='random_matt0_brier1_include2_kfold3',
+                 std_dev_type='spline', covar_type='team_points', full_model_rel_weight=1, matchup_seed=False,
+                 use_covar=True, use_ownership=0, salary_remain_max=None):
 
         self.week = week
         self.set_year = set_year
         self.pos_require_start = pos_require_start
         self.num_iters = num_iters
         self.salary_cap = salary_cap
-     
+        self.pred_vers = pred_vers
+        self.reg_ens_vers = reg_ens_vers
+        self.std_dev_type = std_dev_type
+        self.million_ens_vers = million_ens_vers
+        self.covar_type = covar_type
+        self.full_model_rel_weight = full_model_rel_weight
         self.use_covar = use_covar
         self.use_ownership = use_ownership
         self.salary_remain_max = salary_remain_max  
-        self.db_name = db_name
+        self.boot = False
+        self.conn = conn
 
-        self.player_data = player_data
-        self.covar = covar
-        self.min_max = min_max
+        if self.use_covar and 'boot' not in std_dev_type: 
+            player_data = self.get_covar_means()
+            self.covar = self.pull_covar()
+            
+        elif 'boot' in std_dev_type:
+            player_data, self.points_dist = self.get_boot_data()
+            self.boot = True
+            self.use_covar = False
+
+        else: 
+            player_data = self.get_model_predictions()
+
+        # join in salary data to player data
+        self.player_data = self.join_salary(player_data)
 
         # pull in the vegas points
         self.vegas_points = self.pull_vegas_points()
@@ -42,25 +60,172 @@ class FootballSimulation:
         if matchup_seed: self.matchup_seed = np.random.randint(20000)
         else: self.matchup_seed = None
 
-    def get_conn(self):
-        from pathlib import Path
-        filepath = Path(__file__).parents[0] / self.db_name
-        conn = sqlite3.connect(filepath)
-        
-        return conn
 
+
+    def get_covar_means(self):
+        # pull in the player data (means, team, position) and covariance matrix
+        player_data = pd.read_sql_query(f'''SELECT * 
+                                            FROM Covar_Means
+                                            WHERE week={self.week}
+                                                    AND year={self.set_year}
+                                                    AND pred_vers='{self.pred_vers}'
+                                                    AND reg_ens_vers='{self.reg_ens_vers}'
+                                                    AND std_dev_type='{self.std_dev_type}'
+                                                    AND covar_type='{self.covar_type}' 
+                                                    AND full_model_rel_weight={self.full_model_rel_weight}''', 
+                                             self.conn)
+        return player_data
+
+    def pull_covar(self):
+        covar = pd.read_sql_query(f'''SELECT player, player_two, covar
+                                      FROM Covar_Matrix
+                                      WHERE week={self.week}
+                                            AND year={self.set_year}
+                                            AND pred_vers='{self.pred_vers}'
+                                            AND reg_ens_vers='{self.reg_ens_vers}'
+                                            AND std_dev_type='{self.std_dev_type}'
+                                            AND covar_type='{self.covar_type}'
+                                            AND full_model_rel_weight={self.full_model_rel_weight} ''', 
+                                       self.conn)
+        covar = pd.pivot_table(covar, index='player', columns='player_two').reset_index().fillna(0)
+        covar.columns = [c[1] if i!=0 else 'player' for i, c in enumerate(covar.columns)]
+        return covar
+
+
+    def get_model_predictions(self):
+        df = pd.read_sql_query(f'''SELECT * 
+                                   FROM Model_Predictions
+                                   WHERE week={self.week}
+                                        AND year={self.set_year}
+                                        AND pred_vers='{self.pred_vers}'
+                                        AND reg_ens_vers='{self.reg_ens_vers}'
+                                        AND std_dev_type='{self.std_dev_type}'
+                                        AND pos !='K'
+                                        AND pos IS NOT NULL
+                                        AND player!='Ryan Griffin'
+                    
+                                ''', self.conn)
+        df['weighting'] = 1
+        df.loc[df.model_type=='full_model', 'weighting'] = self.full_model_rel_weight
+
+        score_cols = ['pred_fp_per_game', 'std_dev', 'min_score', 'max_score']
+        for c in score_cols: 
+            df[c] = df[c] * df.weighting
+
+        # Groupby and aggregate with namedAgg [1]:
+        df = df.groupby(['player', 'pos'], as_index=False).agg({'pred_fp_per_game': 'sum', 
+                                                                'std_dev': 'sum',
+                                                                'weighting': 'sum',
+                                                                'min_score': 'sum',
+                                                                'max_score': 'sum'})
+
+        for c in score_cols: df[c] = df[c] / df.weighting
+        df.loc[df.pos=='Defense', 'pos'] = 'DEF'
+        teams = pd.read_sql_query(f'''SELECT player, team 
+                                      FROM Player_Teams 
+                                      WHERE week={self.week} 
+                                            AND year={self.set_year}
+                                    ''', 
+                                    self.conn)
+        df = pd.merge(df, teams, on=['player'])
+
+        drop_teams = self.get_drop_teams()
+        df = df[~df.team.isin(drop_teams)].reset_index(drop=True)
+
+        return df.drop('weighting', axis=1)
+    
+    def get_boot_data(self):
+        df = pd.read_sql_query(f'''SELECT *
+                                   FROM Model_Predictions_Boot
+                                   WHERE week={self.week}
+                                        AND year={self.set_year}
+                                        AND version='{self.pred_vers}'
+                                        AND ensemble_vers='{self.ensemble_vers}'
+                                        AND std_dev_type='{self.std_dev_type}'
+                                        AND pos !='K'
+                                        AND pos IS NOT NULL
+                                        AND player!='Ryan Griffin'
+                                            ''', self.conn)
+        
+        df['weighting'] = 1
+        df.loc[df.model_type=='full_model', 'weighting'] = self.full_model_rel_weight
+
+        score_cols = []
+        agg_dict = {'weighting': 'sum'}
+        for c in df.columns:
+            if c not in ('player', 'team', 'week', 'year', 'dk_salary', 'pos', 'version', 'ensemble_vers', 'std_dev_type', 'model_type', 'weighting'):
+                df[c] = df[c] * df.weighting
+                df = df.rename(columns={c: int(c)})
+                score_cols.append(int(c))
+                agg_dict[int(c)] = 'sum'
+                
+        # Groupby and aggregate with namedAgg [1]:
+        df = df.groupby(['player', 'pos'], as_index=False).agg(agg_dict)
+        
+        for c in score_cols:
+            df[c] = df[c] / df.weighting
+        points = df.drop(['pos', 'weighting'], axis=1)
+
+        df = df[['player', 'pos']].assign(pred_fp_per_game=df[score_cols].mean(axis=1))
+        teams = pd.read_sql_query(f'''SELECT player, team 
+                                      FROM Player_Teams 
+                                      WHERE week={self.week} 
+                                            AND year={self.set_year}''', self.conn)
+        df = pd.merge(df, teams, on=['player'])
+
+        drop_teams = self.get_drop_teams()
+        df = df[~df.team.isin(drop_teams)].reset_index(drop=True)
+        
+        df.loc[df.pos=='Defense', 'pos'] = 'DEF'
+        
+        return df, points
+
+
+    def get_drop_teams(self):
+
+        df = pd.read_sql_query(f'''SELECT away_team, home_team, gametime 
+                                   FROM Gambling_Lines 
+                                   WHERE week={self.week} 
+                                         and year={self.set_year} 
+                    ''', self.conn)
+        df.gametime = pd.to_datetime(df.gametime)
+        df['day_of_week'] = df.gametime.apply(lambda x: x.weekday())
+        df['hour_in_day'] = df.gametime.apply(lambda x: x.hour)
+        df = df[(df.day_of_week!=6) | (df.hour_in_day > 16) | (df.hour_in_day < 11)]
+        drop_teams = list(df.away_team.values)
+        drop_teams.extend(list(df.home_team.values))
+
+        return drop_teams
+
+
+    def join_salary(self, df):
+
+        # add salaries to the dataframe and set index to player
+        salaries = pd.read_sql_query(f'''SELECT player, salary
+                                        FROM Salaries
+                                        WHERE year={self.set_year}
+                                            AND week={self.week} ''', 
+                                        self.conn)
+
+        df = pd.merge(df, salaries, how='left', left_on='player', right_on='player')
+        df.salary = df.salary.fillna(10000)
+
+        return df
 
     def join_ownership_pred(self, df):
-        
-        conn = self.get_conn()
+
         # add salaries to the dataframe and set index to player
         ownership = pd.read_sql_query(f'''SELECT player, pred_ownership, std_dev+0.01 as std_dev, min_score, max_score
                                           FROM Predicted_Ownership
                                           WHERE year={self.set_year}
                                                 AND week={self.week}
-                                                AND ownership_vers='{self.ownership_vers}' ''', conn)
+                                                AND ownership_vers='{self.ownership_vers}'
+                                                AND pred_vers='{self.pred_vers}'
+                                                AND million_ens_vers='{self.million_ens_vers}' ''', 
+                                        self.conn)
 
         if self.use_covar: df = df.drop(['pred_fp_per_game'], axis=1)
+        elif self.boot: df = df.copy()
         else: df = df.drop(['pred_fp_per_game', 'std_dev', 'min_score','max_score'], axis=1)
 
         df = pd.merge(df, ownership, how='left', on='player')
@@ -79,24 +244,21 @@ class FootballSimulation:
 
     def pull_vegas_points(self):
 
-        conn = self.get_conn()
-
         # add salaries to the dataframe and set index to player
         df = pd.read_sql_query(f'''SELECT team, implied_points_for vegas_points, std_dev, min_score, max_score
-                                    FROM Vegas_Points
-                                    WHERE year={self.set_year}
+                                   FROM Vegas_Points
+                                   WHERE year={self.set_year}
                                             AND week={self.week}
-                                            ''', conn)
+                                            ''', self.conn)
         df = df[df.team.isin(self.player_data.team.unique())].reset_index(drop=True)
         return df
 
     def get_matchups(self):
-        conn = self.get_conn()
         df = pd.read_sql_query(f'''SELECT away_team, home_team
                                    FROM Gambling_Lines 
                                    WHERE week={self.week} 
                                          and year={self.set_year} 
-                    ''', conn)
+                    ''', self.conn)
 
         df = df[(df.away_team.isin(self.player_data.team.unique())) & \
                 (df.home_team.isin(self.player_data.team.unique()))]
@@ -204,7 +366,7 @@ class FootballSimulation:
     def covar_dist(self, num_options=500):
 
         unique_matchups = self.unique_matchup_pairs(self.matchups)
-        min_max = self.min_max
+        min_max = self.get_model_predictions()[['player', 'min_score', 'max_score']]
         
         dists = pd.DataFrame()
         for matchup in unique_matchups:
@@ -250,6 +412,16 @@ class FootballSimulation:
         if self.use_covar and not ownership: 
             predictions = self.covar_dist(num_options)
             predictions = pd.concat([labels, predictions], axis=1)
+
+        elif self.boot:
+            points_dist = self._df_shuffle(self.points_dist)
+            idx_choices = ['player']
+            idx_choices.extend(np.random.choice(range(1000), size=num_options))
+            predictions = pd.merge(labels, points_dist[idx_choices], on=['player'])
+            
+            cols = ['player', 'pos', 'team', 'salary']
+            cols.extend(range(num_options))
+            predictions.columns = cols
 
         else: 
             predictions = self.trunc_normal_dist(col, num_options)
@@ -385,19 +557,20 @@ class FootballSimulation:
 
     
     def create_h_ownership(self):
-        conn = self.get_conn()
         mean_own, std_own = pd.read_sql_query(f'''SELECT ownership_mean, ownership_std
                                                   FROM Mean_Ownership
                                                   WHERE week={self.week}
                                                         AND year={self.set_year}
                                                         AND ownership_vers='{self.ownership_vers}'
-                                        ''', conn).values[0]
+                                                        AND pred_vers='{self.pred_vers}'
+                                                        AND million_ens_vers='{self.million_ens_vers}'
+                                        ''', self.conn).values[0]
 
         mean_own = self.pos_or_neg * np.random.normal(mean_own, std_own, size=1).reshape(1, 1)
         return mean_own
 
     @staticmethod
-    def create_G_team(team_map, player_map, adjust_select):
+    def create_G_team(team_map, player_map):
 
         pos_wt = {
             'QB': -2,
@@ -438,7 +611,7 @@ class FootballSimulation:
         col_idx = np.random.choice(range(1,self.cur_vegas_pts.shape[1]), size=1)[0]
         best_teams = self.cur_vegas_pts.iloc[:, [0,col_idx]]
         best_teams = best_teams.sort_values(by=col_idx-1, ascending=False)
-        best_teams = list(best_teams.team[:3].values)
+        best_teams = list(best_teams.team.values)[:3]
         return best_teams
 
     def get_max_team(self, labels, c_points, added_teams):
@@ -498,10 +671,10 @@ class FootballSimulation:
         return h_players
 
     @staticmethod
-    def sample_c_points(data, max_entries):
+    def sample_c_points(data, max_entries, num_avg_pts):
 
         labels = data[['player', 'pos', 'team', 'salary']]
-        current_points = -1 * data.iloc[:, np.random.choice(range(4, max_entries+4))]
+        current_points = -1 * data.iloc[:, np.random.choice(range(4, max_entries+4), size=num_avg_pts)].mean(axis=1)
 
         return labels, current_points
 
@@ -591,12 +764,14 @@ class FootballSimulation:
         return to_drop, matchup_to_drop
 
 
-    def run_sim(self, to_add, to_drop, min_players_same_team_input, set_max_team, 
+    def run_sim(self, conn, to_add, to_drop, min_players_same_team_input, set_max_team, 
                 min_players_opp_team_input=0, adjust_select=False, max_team_type='player_points',
                 num_matchup_drop=0, own_neg_frac=1, n_top_players=5, ownership_vers='standard_ln',
-                static_top_players=True, qb_min_iter=9, qb_set_max_team=False, qb_solo_start=True):
+                static_top_players=True, qb_min_iter=9, qb_set_max_team=False, qb_solo_start=True,
+                num_avg_pts=1):
         
         # can set as argument, but static set for now
+        self.conn = conn
         num_options=250
         player_selections = self.init_select_cnts()
         max_team_cnt = []
@@ -685,10 +860,10 @@ class FootballSimulation:
                 G_players = self.create_G_players(player_idx_map)
                 h_players = self.create_h_players(player_idx_map, h_player_add)
 
-                G_teams = self.create_G_team(team_map, idx_player_map, adjust_select)
+                G_teams = self.create_G_team(team_map, idx_player_map)
         
             # generate the c matrix with the point values to be optimized
-            self.labels, self.c_points = self.sample_c_points(predictions, num_options)
+            self.labels, self.c_points = self.sample_c_points(predictions, num_options, num_avg_pts)
             
             if remaining_pos_cnt > (min_players_same_team+min_player_opp_team-1) and max_added_team_cnt < min_players_same_team:
              
@@ -763,42 +938,46 @@ class FootballSimulation:
 # dm = DataManage(db_path)
 
 
+
+# conn = sqlite3.connect(f'c:/Users/borys/OneDrive/Documents/GitHub/Daily_Fantasy/Data/Databases/Simulation.sqlite3')
+
 # adjust_select = True
-# matchup_drop = 2
-# full_model_weight = 5
-# covar_type = 'no_covar'
-# max_team_type = 'vegas_points'
+# matchup_drop = 1
+# full_model_weight = 0.2
+# covar_type = 'kmeans_pred_trunc'
+# max_team_type = 'player_points'
 # use_covar = True
 # min_players_same_team = 'Auto'
-# min_players_opp_team = 2
-# top_n_players = 2
-# qb_min_iter = 5
-# qb_solo_start = False
-# qb_set_max_team = False
-# static_top_players = True
+# min_players_opp_team = 'Auto'
+# top_n_players = 3
+# qb_min_iter = 2
+# qb_solo_start = True
+# qb_set_max_team = True
+# static_top_players = False
 # use_ownership = 1
 # own_neg_frac = 1
-# salary_remain_max = 1000
-# num_iters = 150
+# salary_remain_max = 500
+# num_iters = 100
 
-# pred_vers = 'sera1_rsq0_brier1_matt1_lowsample_perc_ffa_fc'
-# ens_vers = 'no_weight_yes_kbest_randsample_sera10_rsq1_include2_kfold3_fullstack'
-# std_dev_type = 'boot_reg_quant_frac_random_replace_random'
+# pred_vers = 'sera0_rsq0_mse1_brier1_matt1_bayes'
+# reg_ens_vers = 'random_kbest_sera0_rsq0_mse1_include2_kfold3'
+# million_vers = 'random_matt0_brier1_include2_kfold3'
+# std_dev_type = 'spline_pred_class80_matt0_brier1_kfold3'
 # ownership_vers = 'standard_ln'
 
-# week = 12
+# week = 2
 # year = 2022
 # salary_cap = 50000
 # pos_require_start = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'DEF': 1}
 # set_max_team = None
 
-# sim = FootballSimulation(dm, week, year, salary_cap, pos_require_start, num_iters, 
-#                          ensemble_vers=ens_vers, pred_vers=pred_vers, std_dev_type=std_dev_type,
+# sim = FootballSimulation(conn, week, year, salary_cap, pos_require_start, num_iters, 
+#                          reg_ens_vers=reg_ens_vers, pred_vers=pred_vers, million_ens_vers=million_vers,std_dev_type=std_dev_type,
 #                          full_model_rel_weight=full_model_weight, covar_type=covar_type, use_covar=use_covar, 
 #                          use_ownership=use_ownership, salary_remain_max=salary_remain_max, matchup_seed=False)
 
 
-# to_add = []
+# to_add = ['Mark Andrews', 'Josh Jacobs']
 # to_drop = []
 
 # results, max_team_cnt = sim.run_sim(to_add, to_drop, min_players_same_team, set_max_team, 
@@ -806,7 +985,7 @@ class FootballSimulation:
 #                                     num_matchup_drop=matchup_drop, own_neg_frac=own_neg_frac,
 #                                     n_top_players=top_n_players, static_top_players=static_top_players,
 #                                      qb_solo_start=qb_solo_start, ownership_vers=ownership_vers,
-#                                     qb_set_max_team=qb_set_max_team, qb_min_iter=qb_min_iter)
+#                                     qb_set_max_team=qb_set_max_team, qb_min_iter=qb_min_iter, num_avg_pts=5)
 
 # print(max_team_cnt)
 # results

@@ -35,11 +35,11 @@ def pull_user_list(deta_key):
     credentials = {'usernames': {}}
     for user in users:
         credentials['usernames'][user['key']] = {
-                                                    'email': None, 
-                                                    'name': user['name'], 
-                                                    'password': user['password']
+                                                'email': None, 
+                                                'name': user['name'], 
+                                                'password': user['password']
                                             }
-   
+    
     return credentials
 
 def signup_new_user(deta_key):
@@ -109,148 +109,6 @@ def pull_op_params(filename, week, year):
     op_params = {k: v[0] for k,v in op_params.to_dict().items()}
     return op_params
 
-@st.cache_resource
-class PullData:
-
-    def __init__(self, week, year, filename, op_params):
-        self.week = week
-        self.year = year
-        self.filename = filename
-
-        self.pred_vers = op_params['pred_vers']
-        self.ensemble_vers = op_params['ensemble_vers']
-        self.std_dev_type = op_params['std_dev_type']
-        self.full_model_weight = eval(op_params['full_model_weight'])
-        self.covar_type = eval(op_params['covar_type'])
-
-        if self.covar_type == 'no_covar': self.use_covar = False
-        else: self.use_covar = True
-
-        self.ownership = self.pull_ownership()
-
-        st.write(self.full_model_weight, self.covar_type)
-
-    def pull_ownership(self):
-        conn = get_conn(self.filename)
-        ownership = pd.read_sql_query(f'''SELECT player Player, pred_ownership Ownership
-                                        FROM Predicted_Ownership
-                                        WHERE week={self.week} 
-                                                AND year={self.year}''', conn)
-        ownership.Ownership = ownership.Ownership.apply(lambda x: np.round(100*np.exp(x),1))
-        
-        return ownership
-
-    def get_drop_teams(self):
-
-        conn = get_conn(self.filename)   
-        df = pd.read_sql_query(f'''SELECT away_team, home_team, gametime 
-                                FROM Gambling_Lines 
-                                WHERE week={self.week} 
-                                        AND year={self.year} 
-                    ''', conn)
-        df.gametime = pd.to_datetime(df.gametime)
-        df['day_of_week'] = df.gametime.apply(lambda x: x.weekday())
-        df['hour_in_day'] = df.gametime.apply(lambda x: x.hour)
-        df = df[(df.day_of_week!=6) | (df.hour_in_day > 16) | (df.hour_in_day < 11)]
-        drop_teams = list(df.away_team.values)
-        drop_teams.extend(list(df.home_team.values))
-
-        return drop_teams
-
-
-    def pull_model_predictions(self):
-            conn = get_conn(self.filename)
-            df = pd.read_sql_query(f'''SELECT * 
-                                        FROM Model_Predictions
-                                        WHERE week={self.week}
-                                            AND year={self.year}
-                                            AND version='{self.pred_vers}'
-                                            AND ensemble_vers='{self.ensemble_vers}'
-                                            AND std_dev_type='{self.std_dev_type}'
-                                            AND pos !='K'
-                                            AND pos IS NOT NULL
-                                            AND player!='Ryan Griffin'
-                                                ''', conn)
-            df['weighting'] = 1
-            df.loc[df.model_type=='full_model', 'weighting'] = self.full_model_weight
-
-            score_cols = ['pred_fp_per_game', 'std_dev', 'min_score', 'max_score']
-            for c in score_cols: 
-                df[c] = df[c] * df.weighting
-
-            df = df.groupby(['player', 'pos'], as_index=False).agg({'pred_fp_per_game': 'sum', 
-                                                                    'std_dev': 'sum',
-                                                                    'weighting': 'sum',
-                                                                    'min_score': 'sum',
-                                                                    'max_score': 'sum'})
-            for c in score_cols: df[c] = df[c] / df.weighting
-            df.loc[df.pos=='Defense', 'pos'] = 'DEF'
-
-            teams = pd.read_sql_query(f'''SELECT player, team 
-                                        FROM Player_Teams 
-                                        WHERE week={self.week} 
-                                                AND year={self.year}''', conn)
-            df = pd.merge(df, teams, on=['player'])
-
-            drop_teams = self.get_drop_teams()
-            df = df[~df.team.isin(drop_teams)].reset_index(drop=True)
-
-            return df.drop('weighting', axis=1)
-
-    def pull_covar(self):
-        conn = get_conn(self.filename)
-        player_data = pd.read_sql_query(f'''SELECT * 
-                                            FROM Covar_Means
-                                            WHERE week={self.week}
-                                                    AND year={self.year}
-                                                    AND pred_vers='{self.pred_vers}'
-                                                    AND ensemble_vers='{self.ensemble_vers}'
-                                                    AND std_dev_type='{self.std_dev_type}'
-                                                    AND covar_type='{self.covar_type}' 
-                                                    AND full_model_rel_weight={self.full_model_weight}''', 
-                                                conn)
-        
-        covar = pd.read_sql_query(f'''SELECT player, player_two, covar
-                                      FROM Covar_Matrix
-                                      WHERE week={self.week}
-                                            AND year={self.year}
-                                            AND pred_vers='{self.pred_vers}'
-                                            AND ensemble_vers='{self.ensemble_vers}'
-                                            AND std_dev_type='{self.std_dev_type}'
-                                            AND covar_type='{self.covar_type}'
-                                            AND full_model_rel_weight={self.full_model_weight}''', 
-                                            conn)
-        
-        covar = pd.pivot_table(covar, index='player', columns='player_two').reset_index().fillna(0)
-        covar.columns = [c[1] if i!=0 else 'player' for i, c in enumerate(covar.columns)]
-
-        return player_data, covar
-    
-    def join_salary(self, df):
-        conn = get_conn(self.filename)
-        # add salaries to the dataframe and set index to player
-        salaries = pd.read_sql_query(f'''SELECT player, salary
-                                         FROM Salaries
-                                         WHERE year={self.year}
-                                               AND week={self.week} ''', conn)
-
-        df = pd.merge(df, salaries, how='left', left_on='player', right_on='player')
-        df.salary = df.salary.fillna(10000)
-
-        return df
-
-    def pull_player_data(self):
-
-        if self.use_covar: 
-            player_data, covar = self.pull_covar()
-            min_max = self.pull_model_predictions()[['player', 'min_score', 'max_score']]
-        else: 
-            player_data, covar, min_max = self.pull_model_predictions(), None, None
-
-        player_data = self.join_salary(player_data)
-
-        return player_data, covar, min_max
-
 
 #------------------
 # App Components
@@ -264,7 +122,22 @@ def headings_text(name):
     text3 = st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
     return titl, subhead, text1, text2, text3
 
-def get_display_data(player_data):
+
+def show_times_selected(df, deta_key, week, year, username):
+    deta = deta_connect(deta_key)
+    db_results = deta.Base('resultsdb')
+    results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items) 
+    
+    if results.shape[0] > 0: 
+        results = results.groupby(['player'], as_index=False).agg({'id': 'count'}).rename(columns={'id': 'num_select'})
+        df = pd.merge(df, results, on='player', how='left').fillna(0)
+    else:
+        df['num_select'] = 0
+
+    return df
+
+
+def get_display_data(player_data, deta_key, week, year, username):
     
     display_data = player_data[['player', 'pos', 'salary', 'pred_fp_per_game']].sort_values(by='salary', ascending=False).reset_index(drop=True)
     
@@ -275,10 +148,12 @@ def get_display_data(player_data):
 
     display_data = display_data.rename(columns={'pred_fp_per_game': 'pred_pts'})
     display_data.pred_pts = display_data.pred_pts.round(1)
+
+    display_data = show_times_selected(display_data, deta_key, week, year, username)
     
     return display_data
 
-def create_interactive_grid(data):
+def update_interactive_grid(data):
     selected = st.data_editor(
             data,
             column_config={
@@ -296,27 +171,41 @@ def create_interactive_grid(data):
             use_container_width=True,
             disabled=["widgets"],
             hide_index=True,
-            height=500
+            height=500,
         )
     return selected
 
 
-@st.cache_data
-def init_sim(player_data, covar, min_max, use_covar, op_params, pos_require_start):
+@st.cache_resource
+def init_sim(_conn, op_params, week, year, pos_require_start):
+    
+    pred_vers = op_params['pred_vers']
+    reg_ens_vers = op_params['reg_ens_vers']
+    std_dev_type = op_params['std_dev_type']
+    million_ens_vers = op_params['million_ens_vers']
+    full_model_weight = eval(op_params['full_model_weight'])
+    covar_type = eval(op_params['covar_type'])
+
+    if covar_type == 'no_covar': use_covar = False
+    else: use_covar = True
+
     num_iters = eval(op_params['num_iters'])
     use_ownership = eval(op_params['use_ownership'])
     salary_remain_max = eval(op_params['max_salary_remain'])
+    matchup_seed = eval(op_params['matchup_seed'])
 
-    sim = FootballSimulation(player_data, covar, min_max, week, year, salary_cap=50000, 
-                             pos_require_start=pos_require_start, num_iters=num_iters, 
-                             matchup_seed=False, use_covar=use_covar, use_ownership=use_ownership, 
-                             salary_remain_max=salary_remain_max, db_name=db_name)
-    return sim
+    sim = FootballSimulation(_conn, week, year, salary_cap=50000, pos_require_start=pos_require_start, num_iters=num_iters, 
+                             pred_vers=pred_vers, reg_ens_vers=reg_ens_vers, million_ens_vers=million_ens_vers,
+                             std_dev_type=std_dev_type, covar_type=covar_type, full_model_rel_weight=full_model_weight, 
+                             matchup_seed=matchup_seed, use_covar=use_covar, use_ownership=use_ownership, 
+                             salary_remain_max=salary_remain_max)
+
+    return sim, sim.player_data
 
 @st.cache_data
 def extract_params(op_params):
 
-    ownership_vers = op_params['ownership_vers']
+    ownership_vers = eval(op_params['ownership_vers'])
     adjust_pos_counts = eval(op_params['adjust_pos_counts'])
     matchup_drop = eval(op_params['matchup_drop'])
     max_team_type = eval(op_params['max_team_type'])
@@ -338,7 +227,7 @@ def extract_params(op_params):
     return ownership_vers, adjust_pos_counts, matchup_drop, max_team_type, min_player_same_team, min_player_opp_team, num_top_players, own_neg_frac, player_drop_multiple, qb_min_iter, qb_set_max_team, qb_solo_start, static_top_players
 
 
-def run_sim(df, sim, op_params, stack_team):
+def run_sim(df, _conn, sim, op_params, stack_team):
     to_add = list(df[df.my_team==True].player.values)
     to_drop = list(df[df.exclude==True].player.values)
 
@@ -354,15 +243,41 @@ def run_sim(df, sim, op_params, stack_team):
         matchup_drop = 0
         qb_min_iter = 9
 
-    st.write(set_max_team, adjust_pos_counts, matchup_drop, min_player_opp_team, min_player_same_team)
+    # st.write('covar_type:', sim.covar_type,
+    #          'model_weight:', sim.full_model_rel_weight,
+    #          '/nset_max_team:', set_max_team, 
+    #          'adjust_pos_counts:', adjust_pos_counts, 
+    #          'matchup_drop:', matchup_drop, 
+    #          'min_player_opp_team:', min_player_opp_team, 
+    #          'min_player_same_team:', min_player_same_team,
+    #          'qb_min_iter:', qb_min_iter,
+    #          'qb_set_max_team:', qb_set_max_team,
+    #          'qb_solo_start:', qb_solo_start
+    #          )
 
-    results, team_cnts = sim.run_sim(to_add, to_drop, min_players_same_team_input=min_player_same_team, set_max_team=set_max_team, 
-                                    min_players_opp_team_input=min_player_opp_team, adjust_select=adjust_pos_counts, 
-                                    max_team_type=max_team_type, num_matchup_drop=matchup_drop, own_neg_frac=own_neg_frac, 
-                                    n_top_players=num_top_players, ownership_vers=ownership_vers, static_top_players=static_top_players, 
-                                    qb_min_iter=qb_min_iter, qb_set_max_team=qb_set_max_team, qb_solo_start=qb_solo_start)
+    results, team_cnts = sim.run_sim(_conn, to_add, to_drop, min_players_same_team_input=min_player_same_team, set_max_team=set_max_team, 
+                                     min_players_opp_team_input=min_player_opp_team, adjust_select=adjust_pos_counts, 
+                                     max_team_type=max_team_type, num_matchup_drop=matchup_drop, own_neg_frac=own_neg_frac, 
+                                     n_top_players=num_top_players, ownership_vers=ownership_vers, static_top_players=static_top_players, 
+                                     qb_min_iter=qb_min_iter, qb_set_max_team=qb_set_max_team, qb_solo_start=qb_solo_start)
     return results, team_cnts
 
+    
+@st.cache_data
+def auto_select(selected, _conn, _sim, op_params, stack_team):
+    
+    num_selected = selected.my_team.sum()
+    while num_selected < 9:
+        
+        results, team_cnts = run_sim(selected, _conn, _sim, op_params, stack_team)
+        results = results[results.SelectionCounts<100]
+        
+        top_choice = results.iloc[0, 0]
+        selected.loc[selected.player==top_choice, 'my_team'] = True
+        num_selected = selected.my_team.sum()
+        st.write(f'{top_choice} added to team. {num_selected}/9 selected.')
+    
+    return selected
 
 def init_my_team_df(pos_require):
 
@@ -475,7 +390,6 @@ def download_saved_teams(deta_key, filename, week, year, username):
         
         save_result = pd.DataFrame()
         for r in results['id'].unique():
-            print(r)
             cur_result = create_database_output(results[results.id==r], filename, week, year)
             save_result = pd.concat([save_result, cur_result], axis=0)
 
@@ -486,7 +400,7 @@ def download_saved_teams(deta_key, filename, week, year, username):
     
         st.write('No saved teams yet!')
         return pd.DataFrame().to_csv().encode('utf-8')
-
+    
 #======================
 # Run the App
 #======================
@@ -508,59 +422,71 @@ def main():
         credentials = pull_user_list(deta_key)
         name, authentication_status, username, authenticator = authenticate_user(credentials)
 
-        if authentication_status == False:
-            st.error('Username/password is incorrect')
-        if authentication_status == None:
-            st.warning('Please enter your username and password')
+        if authentication_status == False: st.error('Username/password is incorrect')
+        if authentication_status == None: st.warning('Please enter your username and password')
 
         if authentication_status:
-
-            with st.sidebar:
-                authenticator.logout('Logout', 'main')
-                        
-                st.header('Simulation Parameters')
-                if st.button("Refresh Data"):
-                    pull_op_params.clear()
-                    PullData.clear()
-                    init_sim.clear()
-                    extract_params.clear()
-
-                st.write('Week:', week)
-                st.write('Year:', year)
             
             headings_text(name)
             col1, col2, col3 = st.columns([4, 3, 3])
             
+            # get current params + requirements
             op_params = pull_op_params(db_name, week, year)
             pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
-            
             team_display = init_my_team_df(pos_require_flex) 
-            data_class = PullData(week, year, db_name, op_params)
-            player_data, covar, min_max = data_class.pull_player_data()
+
+            # intialize simulation
+            conn = get_conn(db_name)
+            sim, player_data = init_sim(conn, op_params, week, year, pos_require_start)
             
+            # get the player selection data and set to session state for auto select
+            display_data = get_display_data(player_data, deta_key, week, year, username)
+            if "dd" not in st.session_state: 
+                st.session_state["dd"] = display_data
+                st.session_state["dd_edited"] = st.session_state["dd"]
+
             with st.sidebar:
+                authenticator.logout('Logout', 'main')
+                        
+                st.header('Reset Current Selections')
+                if st.button("Refresh Data"):
+                    pull_op_params.clear()
+                    init_sim.clear()
+                    extract_params.clear()
+                    st.session_state["dd"] = get_display_data(player_data, deta_key, week, year, username)
+
+                st.header('Simulation Parameters')
+                st.write('Week:', week)
+                st.write('Year:', year)
                 stack_team = st.selectbox('Stack Team', ['Auto']+sorted(list(player_data.team.unique())))
 
+                st.header('Auto Fill Current Team')
+                if st.button("Auto Select"):
+                    st.session_state["dd"] = auto_select(st.session_state["dd"], conn, sim, op_params, stack_team)
+
+                st.header('CSV for Draftkings')
                 st.download_button(
                         "Download Saved Teams",
                         download_saved_teams(deta_key, db_name, week, year, username),
                         f"week{week}_year{year}_saved_teams.csv",
                         "text/csv",
                         key='download-csv'
-                    )
+                )
             
-            display_data = get_display_data(player_data)
-            sim = init_sim(player_data, covar, min_max, data_class.use_covar, op_params, pos_require_start)
-
             with col1:
                 st.header('1. Choose Players')
                 st.write('*Check **my_team** box to select a player* ✅')
-                selected = create_interactive_grid(display_data)
+                
+                # st.write(st.session_state["dd"].head(10))
+                selected = update_interactive_grid(st.session_state["dd"])
                 my_team = selected.loc[selected.my_team==True]
+                # st.write(st.session_state["dd"].head(10))
 
-            results, team_cnts = run_sim(selected, sim, op_params, stack_team)
+            results, team_cnts = run_sim(selected, conn, sim, op_params, stack_team)
             results = results[results.SelectionCounts<100]
-            
+            st.session_state["dd"] = selected.copy()
+            st.write(st.session_state["dd"].head(10))
+
             with col2: 
                 st.header('2. Review Top Choices')
                 st.write('*These are the optimal players to choose from* ⬇️')
