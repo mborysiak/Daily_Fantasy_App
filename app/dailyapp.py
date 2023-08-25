@@ -246,25 +246,6 @@ def run_sim(df, _conn, sim, op_params, stack_team):
         matchup_drop = 0
         qb_min_iter = 9
 
-    with st.sidebar:
-        st.header('Show Run Parameters')
-        if st.button('Show Params'):
-            st.write('pred_vers', sim.pred_vers)
-            st.write('reg_ens_vers', sim.reg_ens_vers)
-            st.write('million_ens_vers', sim.million_ens_vers)
-            st.write('std_dev_type:', sim.std_dev_type)
-            st.write('full_model_rel_weight:', sim.full_model_rel_weight)
-            st.write('covar_type:', sim.covar_type)
-            st.write('set_max_team:', set_max_team)
-            st.write('adjust_pos_counts:', adjust_pos_counts)
-            st.write('matchup_drop:', matchup_drop)
-            st.write('min_player_opp_team:', min_player_opp_team)
-            st.write('min_player_same_team:', min_player_same_team)
-            st.write('qb_min_iter:', qb_min_iter)
-            st.write('qb_set_max_team:', qb_set_max_team)
-            st.write('qb_solo_start:', qb_solo_start)
-                    
-
     results, team_cnts = sim.run_sim(_conn, to_add, to_drop, min_players_same_team_input=min_player_same_team, set_max_team=set_max_team, 
                                      min_players_opp_team_input=min_player_opp_team, adjust_select=adjust_pos_counts, 
                                      max_team_type=max_team_type, num_matchup_drop=matchup_drop, own_neg_frac=own_neg_frac, 
