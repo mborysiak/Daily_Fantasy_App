@@ -254,6 +254,23 @@ def run_sim(df, _conn, sim, op_params, stack_team):
                                      num_avg_pts=num_avg_pts)
     return results, team_cnts
 
+
+def show_results(results):
+    return st.data_editor(
+                    results,
+                    column_config={
+                        "SelectionCounts": st.column_config.ProgressColumn(
+                            "SelectionCounts",
+                            help="Percent of selections in best lineup",
+                            format="%.1f",
+                            min_value=0,
+                            max_value=100,
+                        ),
+                    },
+                    hide_index=True,
+                    height=500,
+                    use_container_width=True
+                )
     
 @st.cache_data
 def auto_select(selected, _conn, _sim, op_params, stack_team):
@@ -478,24 +495,7 @@ def main():
             with col2: 
                 st.header('2. Review Top Choices')
                 st.write('*These are the optimal players to choose from* ⬇️')
-
-                
-                st.data_editor(
-                    results,
-                    column_config={
-                        "SelectionCounts": st.column_config.ProgressColumn(
-                            "SelectionCounts",
-                            help="Percent of selections in best lineup",
-                            format="%.1f",
-                            min_value=0,
-                            max_value=100,
-                        ),
-                    },
-                    hide_index=True,
-                    height=500,
-                    use_container_width=True
-                )
-                # st.dataframe(results, use_container_width=True, height=500)
+                show_results(results)
 
             with col3:      
                 st.header("⚡:green[Your Team]⚡")  
