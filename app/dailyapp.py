@@ -121,6 +121,11 @@ def headings_text(name):
     text3 = st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
     return titl, subhead, text1, text2, text3
 
+def side_bar_labels(op_params, week, year):
+                    st.header('Simulation Information')
+                    st.write('Last Update:', op_params['last_update'])
+                    st.write('Week:', str(week))
+                    st.write('Year:', str(year))
 
 def show_times_selected(df, deta_key, week, year, username):
     deta = deta_connect(deta_key)
@@ -387,9 +392,27 @@ def create_database_output(my_team, filename, week, year):
     return dk_output
 
 
-def download_saved_teams(deta_key, filename, week, year, username):
+@st.cache_data
+def pull_saved_auto_lineups(db_name, week, year, num_auto_lineups):
+    conn = get_conn(db_name)
+    saved_lineups = pd.read_sql_query(f'''SELECT *
+                                            FROM Automated_Lineups
+                                            WHERE week={week}
+                                                AND year={year}
+                                       ''', conn)
     
+    num_auto_lineups = np.min([num_auto_lineups, saved_lineups.shape[0]])
+    saved_lineups = saved_lineups.sample(n=num_auto_lineups).drop(['week', 'year', 'contest'], axis=1).reset_index(drop=True)
+
+    return saved_lineups
+
+
+def download_saved_teams(deta_key, filename, week, year, username, num_auto_lineups):
+    if num_auto_lineups > 0: auto_lineups = pull_saved_auto_lineups(filename, week, year, num_auto_lineups)
+    else: auto_lineups = pd.DataFrame()
+
     try:
+        
 
         deta = deta_connect(deta_key)
         db_results = deta.Base('resultsdb')
@@ -400,6 +423,9 @@ def download_saved_teams(deta_key, filename, week, year, username):
             cur_result = create_database_output(results[results.id==r], filename, week, year)
             save_result = pd.concat([save_result, cur_result], axis=0)
 
+        save_result['lineup_type'] = 'manual'
+        auto_lineups['lineup_type'] = 'auto'
+        save_result = pd.concat([save_result, auto_lineups], axis=0).reset_index(drop=True)
     
         return save_result.to_csv().encode('utf-8')
     
@@ -460,10 +486,8 @@ def main():
                     init_sim.clear()
                     extract_params.clear()
                     st.session_state["dd"] = get_display_data(player_data, deta_key, week, year, username)
-
-                st.header('Simulation Parameters')
-                st.write('Week:', week)
-                st.write('Year:', year)
+                
+                side_bar_labels(op_params, week, year)
                 stack_team = st.selectbox('Stack Team', ['Auto']+sorted(list(player_data.team.unique())))
             
             with col1:
@@ -478,9 +502,10 @@ def main():
                     my_team = st.session_state["dd"].loc[st.session_state["dd"].my_team==True]
 
                 st.header('CSV for Draftkings')
+                num_auto_lineups = st.number_input('Number Auto Lineups', min_value=0, max_value=100, value=20, step=1)
                 st.download_button(
                         "Download Saved Teams",
-                        download_saved_teams(deta_key, db_name, week, year, username),
+                        download_saved_teams(deta_key, db_name, week, year, username, num_auto_lineups),
                         f"week{week}_year{year}_saved_teams.csv",
                         "text/csv",
                         key='download-csv'
