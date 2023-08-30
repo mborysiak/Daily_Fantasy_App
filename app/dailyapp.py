@@ -398,22 +398,21 @@ def pull_saved_auto_lineups(db_name, week, year, num_auto_lineups):
     saved_lineups = pd.read_sql_query(f'''SELECT *
                                             FROM Automated_Lineups
                                             WHERE week={week}
-                                                AND year={year}
+                                                  AND year={year}
                                        ''', conn)
     
     num_auto_lineups = np.min([num_auto_lineups, saved_lineups.shape[0]])
     saved_lineups = saved_lineups.sample(n=num_auto_lineups).drop(['week', 'year', 'contest'], axis=1).reset_index(drop=True)
-
+    
     return saved_lineups
 
 
 def download_saved_teams(deta_key, filename, week, year, username, num_auto_lineups):
     if num_auto_lineups > 0: auto_lineups = pull_saved_auto_lineups(filename, week, year, num_auto_lineups)
     else: auto_lineups = pd.DataFrame()
-
+    
     try:
         
-
         deta = deta_connect(deta_key)
         db_results = deta.Base('resultsdb')
         results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items) 
@@ -423,6 +422,7 @@ def download_saved_teams(deta_key, filename, week, year, username, num_auto_line
             cur_result = create_database_output(results[results.id==r], filename, week, year)
             save_result = pd.concat([save_result, cur_result], axis=0)
 
+        auto_lineups.columns = save_result.columns
         save_result['lineup_type'] = 'manual'
         auto_lineups['lineup_type'] = 'auto'
         save_result = pd.concat([save_result, auto_lineups], axis=0).reset_index(drop=True)
