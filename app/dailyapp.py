@@ -217,7 +217,7 @@ def extract_params(op_params):
     min_player_opp_team = eval(op_params['min_players_opp_team'])
     num_top_players = eval(op_params['num_top_players'])
     own_neg_frac = eval(op_params['own_neg_frac'])
-    player_drop_multiple = eval(op_params['player_drop_multiple'])
+    player_drop_multiple = 0#eval(op_params['player_drop_multiple'])
     qb_min_iter = eval(op_params['qb_min_iter'])
     qb_set_max_team = eval(op_params['qb_set_max_team'])
     qb_solo_start = eval(op_params['qb_solo_start'])
