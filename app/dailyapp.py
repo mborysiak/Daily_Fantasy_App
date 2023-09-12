@@ -289,7 +289,7 @@ def auto_select(selected, _conn, _sim, op_params, stack_team):
         top_choice = results.iloc[0, 0]
         selected.loc[selected.player==top_choice, 'my_team'] = True
         num_selected = selected.my_team.sum()
-        st.write(f'{top_choice} added to team. {num_selected}/9 selected.')
+        #st.write(f'{top_choice} added to team. {num_selected}/9 selected.')
     
     return selected
 
@@ -407,16 +407,23 @@ def pull_saved_auto_lineups(db_name, week, year, num_auto_lineups):
     return saved_lineups
 
 
+def pull_user_lineups(deta_key, week, year, username):
+    try:
+        deta = deta_connect(deta_key)
+        db_results = deta.Base('resultsdb')
+        results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items)
+    except:
+        results = pd.DataFrame()
+    return results
+
+
 def download_saved_teams(deta_key, filename, week, year, username, num_auto_lineups):
     if num_auto_lineups > 0: auto_lineups = pull_saved_auto_lineups(filename, week, year, num_auto_lineups)
     else: auto_lineups = pd.DataFrame()
     
     try:
-        
-        deta = deta_connect(deta_key)
-        db_results = deta.Base('resultsdb')
-        results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items) 
-        
+        results = pull_user_lineups(deta_key, week, year, username)
+         
         save_result = pd.DataFrame()
         for r in results['id'].unique():
             cur_result = create_database_output(results[results.id==r], filename, week, year)
@@ -502,6 +509,7 @@ def main():
                     my_team = st.session_state["dd"].loc[st.session_state["dd"].my_team==True]
 
                 st.header('CSV for Draftkings')
+                st.write('Number Manual Lineups:', pull_user_lineups(deta_key, week, year, username).shape[0])
                 num_auto_lineups = st.number_input('Number Auto Lineups', min_value=0, max_value=100, value=20, step=1)
                 st.download_button(
                         "Download Saved Teams",
