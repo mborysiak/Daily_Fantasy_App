@@ -412,6 +412,7 @@ def pull_user_lineups(deta_key, week, year, username):
         deta = deta_connect(deta_key)
         db_results = deta.Base('resultsdb')
         results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items)
+        
     except:
         results = pd.DataFrame()
     return results
@@ -424,10 +425,7 @@ def download_saved_teams(deta_key, filename, week, year, username, num_auto_line
     try:
         results = pull_user_lineups(deta_key, week, year, username)
          
-        save_result = pd.DataFrame()
-        for r in results['id'].unique():
-            cur_result = create_database_output(results[results.id==r], filename, week, year)
-            save_result = pd.concat([save_result, cur_result], axis=0)
+        
 
         auto_lineups.columns = save_result.columns
         save_result['lineup_type'] = 'manual'
@@ -509,7 +507,7 @@ def main():
                     my_team = st.session_state["dd"].loc[st.session_state["dd"].my_team==True]
 
                 st.header('CSV for Draftkings')
-                st.write('Number Manual Lineups:', pull_user_lineups(deta_key, week, year, username).shape[0])
+                st.write('Number Manual Lineups:', len(pull_user_lineups(deta_key, week, year, username).id.unique()))
                 num_auto_lineups = st.number_input('Number Auto Lineups', min_value=0, max_value=100, value=20, step=1)
                 st.download_button(
                         "Download Saved Teams",
