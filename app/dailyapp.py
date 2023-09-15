@@ -412,13 +412,18 @@ def pull_user_lineups(deta_key, week, year, username):
         deta = deta_connect(deta_key)
         db_results = deta.Base('resultsdb')
         results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items)
-        st.write(results)
     
     except:
         results = pd.DataFrame({'id': [], 'created_at': [], 'user': [], 'week': [], 'year': [], 'pos': [], 'player': []})
 
     return results
 
+
+def get_num_manual_lineups(deta_key, week, year, username):
+                num_manual_lineups = pull_user_lineups(deta_key, week, year, username)
+                if len(num_manual_lineups) > 0: num_manual_lineups = len(num_manual_lineups.id.unique())
+                else: num_manual_lineups = 0
+                return num_manual_lineups
 
 def download_saved_teams(deta_key, filename, week, year, username, num_auto_lineups):
     if num_auto_lineups > 0: auto_lineups = pull_saved_auto_lineups(filename, week, year, num_auto_lineups)
@@ -512,7 +517,9 @@ def main():
                     my_team = st.session_state["dd"].loc[st.session_state["dd"].my_team==True]
 
                 st.header('CSV for Draftkings')
-                st.write('Number Manual Lineups:', len(pull_user_lineups(deta_key, week, year, username).id.unique()))
+                
+                num_manual_lineups = get_num_manual_lineups(deta_key, week, year, username)
+                st.write('Number Manual Lineups:', num_manual_lineups)
                 num_auto_lineups = st.number_input('Number Auto Lineups', min_value=0, max_value=100, value=20, step=1)
                 st.download_button(
                         "Download Saved Teams",
