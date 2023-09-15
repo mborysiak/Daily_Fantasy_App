@@ -412,8 +412,11 @@ def pull_user_lineups(deta_key, week, year, username):
         deta = deta_connect(deta_key)
         db_results = deta.Base('resultsdb')
         results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items)
+        st.write(results)
+    
     except:
-        results = pd.DataFrame()
+        results = pd.DataFrame({'id': [], 'created_at': [], 'user': [], 'week': [], 'year': [], 'pos': [], 'player': []})
+
     return results
 
 
