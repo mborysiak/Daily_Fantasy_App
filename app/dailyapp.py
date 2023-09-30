@@ -11,7 +11,7 @@ import streamlit_authenticator as stauth
 from deta import Deta
 
 year = 2023
-week = 3
+week = 4
 
 total_lineups = 5
 db_name = 'Simulation_App.sqlite3'
