@@ -251,6 +251,8 @@ def run_sim(df, _conn, sim, op_params, stack_team):
         matchup_drop = 0
         qb_min_iter = 9
 
+    st.write(adjust_pos_counts)
+
     results, team_cnts = sim.run_sim(_conn, to_add, to_drop, min_players_same_team_input=min_player_same_team, set_max_team=set_max_team, 
                                      min_players_opp_team_input=min_player_opp_team, adjust_select=adjust_pos_counts, 
                                      max_team_type=max_team_type, num_matchup_drop=matchup_drop, own_neg_frac=own_neg_frac, 
@@ -284,7 +286,7 @@ def auto_select(selected, _conn, _sim, op_params, stack_team):
     while num_selected < 9:
         
         results, team_cnts = run_sim(selected, _conn, _sim, op_params, stack_team)
-        results = results[results.SelectionCounts<100]
+        results = results.iloc[num_selected]
         
         top_choice = results.iloc[0, 0]
         selected.loc[selected.player==top_choice, 'my_team'] = True
@@ -529,11 +531,12 @@ def main():
                         key='download-csv'
                 )
 
-            with col1:
-                my_team = selected.loc[selected.my_team==True]
             
+            my_team = selected.loc[selected.my_team==True]
             results, team_cnts = run_sim(selected, conn, sim, op_params, stack_team)
-            results = results[results.SelectionCounts<100]
+            
+            num_selected = selected.my_team.sum()
+            results = results.iloc[num_selected:]
 
             with col2: 
                 st.header('2. Review Top Choices')
