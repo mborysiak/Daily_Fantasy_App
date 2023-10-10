@@ -535,8 +535,8 @@ def main():
             my_team = selected.loc[selected.my_team==True]
             results, team_cnts = run_sim(selected, conn, sim, op_params, stack_team)
             st.write(results)
-            num_selected = selected.my_team.sum()
-            results = results.iloc[num_selected:]
+            rm_players = my_team.player.unique()
+            results = results[~results.player.isin(rm_players)]
 
             with col2: 
                 st.header('2. Review Top Choices')
