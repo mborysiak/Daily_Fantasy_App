@@ -223,6 +223,7 @@ def extract_params(op_params):
     qb_solo_start = eval(op_params['qb_solo_start'])
     static_top_players = eval(op_params['static_top_players'])
     num_avg_pts = eval(op_params['num_avg_pts'])
+    
 
     try: min_player_opp_team = int(min_player_opp_team)
     except: pass
@@ -250,8 +251,6 @@ def run_sim(df, _conn, sim, op_params, stack_team):
         qb_set_max_team = False
         matchup_drop = 0
         qb_min_iter = 9
-
-    st.write(adjust_pos_counts)
 
     results, team_cnts = sim.run_sim(_conn, to_add, to_drop, min_players_same_team_input=min_player_same_team, set_max_team=set_max_team, 
                                      min_players_opp_team_input=min_player_opp_team, adjust_select=adjust_pos_counts, 
@@ -287,9 +286,10 @@ def auto_select(selected, _conn, _sim, op_params, stack_team):
         
         results, team_cnts = run_sim(selected, _conn, _sim, op_params, stack_team)
         rm_players = selected.loc[selected.my_team==True, 'player'].unique()
-        results = results[~results.player.isin(rm_players)]
+        results = results[~results.player.isin(rm_players)].reset_index(drop=True)
         
-        top_choice = results.iloc[0, 0]
+        top_n_choice = eval(op_params['top_n_choices'])
+        top_choice = results.iloc[top_n_choice, 0]
         selected.loc[selected.player==top_choice, 'my_team'] = True
         num_selected = selected.my_team.sum()
         #st.write(f'{top_choice} added to team. {num_selected}/9 selected.')
@@ -535,9 +535,9 @@ def main():
             
             my_team = selected.loc[selected.my_team==True]
             results, team_cnts = run_sim(selected, conn, sim, op_params, stack_team)
-            st.write(results)
+            
             rm_players = my_team.player.unique()
-            results = results[~results.player.isin(rm_players)]
+            results = results[~results.player.isin(rm_players)].reset_index(drop=True)
 
             with col2: 
                 st.header('2. Review Top Choices')
