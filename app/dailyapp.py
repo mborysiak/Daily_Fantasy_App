@@ -286,7 +286,8 @@ def auto_select(selected, _conn, _sim, op_params, stack_team):
     while num_selected < 9:
         
         results, team_cnts = run_sim(selected, _conn, _sim, op_params, stack_team)
-        results = results.iloc[num_selected:]
+        rm_players = selected.loc[selected.my_team==True, 'player'].unique()
+        results = results[~results.player.isin(rm_players)]
         
         top_choice = results.iloc[0, 0]
         selected.loc[selected.player==top_choice, 'my_team'] = True
