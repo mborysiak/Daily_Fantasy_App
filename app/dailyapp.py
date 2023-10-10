@@ -287,9 +287,14 @@ def auto_select(selected, _conn, _sim, op_params, stack_team):
         results, team_cnts = run_sim(selected, _conn, _sim, op_params, stack_team)
         rm_players = selected.loc[selected.my_team==True, 'player'].unique()
         results = results[~results.player.isin(rm_players)].reset_index(drop=True)
+
+        st.write(results.head(5))
+        
         
         top_n_choice = eval(op_params['top_n_choices'])
+        st.write(top_n_choice)
         top_choice = results.iloc[top_n_choice, 0]
+        st.write(top_choice)
         selected.loc[selected.player==top_choice, 'my_team'] = True
         num_selected = selected.my_team.sum()
         #st.write(f'{top_choice} added to team. {num_selected}/9 selected.')
