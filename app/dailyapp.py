@@ -480,7 +480,7 @@ def main():
         if authentication_status:
             
             headings_text(name)
-            col1, col2, col3 = st.columns([4, 3, 3])
+            col1, col2, col3 = st.columns([4, 3, 2])
             
             # get current params + requirements
             op_params = pull_op_params(db_name, week, year)
