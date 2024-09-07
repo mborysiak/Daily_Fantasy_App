@@ -6,12 +6,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
-from zSim_Helper_Covar import FootballSimulation
+from zSim_Helper_Covar import FootballSimulation, RunSim
 import streamlit_authenticator as stauth
 from deta import Deta
+from pathlib import Path
 
-year = 2023
-week = 17
+year = 2024
+week = 1
 
 total_lineups = 5
 db_name = 'Simulation_App.sqlite3'
@@ -77,11 +78,13 @@ def authenticate_user(credentials):
 # Pull Data In
 #-----------------
 
+def get_db_path(filename):
+    db_path = Path(__file__).parents[0] / filename
+    return db_path.__str__()
+
 def get_conn(filename):
-    from pathlib import Path
-    filepath = Path(__file__).parents[0] / filename
-    conn = sqlite3.connect(filepath)
-    
+    db_path = get_db_path(filename)
+    conn = sqlite3.connect(db_path)
     return conn
 
 def pull_sim_requirements():
@@ -106,7 +109,8 @@ def pull_op_params(filename, week, year):
                                       WHERE week={week}
                                             AND year={year}''', conn)
     op_params = {k: v[0] for k,v in op_params.to_dict().items()}
-    return op_params
+
+    return op_params, copy.deepcopy(op_params['last_update'])
 
 
 #------------------
@@ -121,9 +125,9 @@ def headings_text(name):
     text3 = st.write(':red[**NOTE:**] *We recommend using desktop for the best experience.* 💻')
     return titl, subhead, text1, text2, text3
 
-def side_bar_labels(op_params, week, year):
+def side_bar_labels(last_update, week, year):
                     st.header('Simulation Information')
-                    st.write('Last Update:', op_params['last_update'])
+                    st.write('Last Update:', last_update)
                     st.write('Week:', str(week))
                     st.write('Year:', str(year))
 
@@ -181,84 +185,43 @@ def update_interactive_grid(data):
 
 
 @st.cache_resource
-def init_sim(_conn, op_params, week, year, pos_require_start):
-    
+def init_sim(db_path, op_params, week, year, pos_require_start):
+
     pred_vers = op_params['pred_vers']
     reg_ens_vers = op_params['reg_ens_vers']
     std_dev_type = op_params['std_dev_type']
     million_ens_vers = op_params['million_ens_vers']
-    full_model_weight = eval(op_params['full_model_weight'])
-    covar_type = eval(op_params['covar_type'])
 
-    if covar_type == 'no_covar': use_covar = False
-    else: use_covar = True
+    for k in ['week', 'year', 'pred_vers', 'reg_ens_vers', 'std_dev_type', 'million_ens_vers', 'last_update']:
+        op_params.pop(k, None)
 
-    num_iters = eval(op_params['num_iters'])
-    use_ownership = eval(op_params['use_ownership'])
-    max_salary_remain = eval(op_params['max_salary_remain'])
-    matchup_seed = eval(op_params['matchup_seed'])
+    for k, v in op_params.items():
+        op_params[k] = eval(v)
 
-    sim = FootballSimulation(_conn, week, year, salary_cap=50000, pos_require_start=pos_require_start, num_iters=num_iters, 
-                             pred_vers=pred_vers, reg_ens_vers=reg_ens_vers, million_ens_vers=million_ens_vers,
-                             std_dev_type=std_dev_type, covar_type=covar_type, full_model_rel_weight=full_model_weight, 
-                             matchup_seed=matchup_seed, use_covar=use_covar, use_ownership=use_ownership, 
-                             salary_remain_max=max_salary_remain)
+    rs = RunSim(db_path, week, year, 50000, pos_require_start, pred_vers, reg_ens_vers, million_ens_vers, std_dev_type, 1)
+    params = rs.generate_param_list(op_params)
+    sim, p, to_add, to_drop_selected = rs.setup_sim(params[0], existing_players=[])
 
-    return sim, sim.player_data
-
-@st.cache_data
-def extract_params(op_params):
-
-    ownership_vers = eval(op_params['ownership_vers'])
-    adjust_pos_counts = eval(op_params['adjust_pos_counts'])
-    matchup_drop = eval(op_params['matchup_drop'])
-    max_team_type = eval(op_params['max_team_type'])
-    min_player_same_team = eval(op_params['min_player_same_team'])
-    min_player_opp_team = eval(op_params['min_players_opp_team'])
-    num_top_players = eval(op_params['num_top_players'])
-    own_neg_frac = eval(op_params['own_neg_frac'])
-    player_drop_multiple = 0#eval(op_params['player_drop_multiple'])
-    qb_min_iter = eval(op_params['qb_min_iter'])
-    qb_set_max_team = eval(op_params['qb_set_max_team'])
-    qb_solo_start = eval(op_params['qb_solo_start'])
-    static_top_players = eval(op_params['static_top_players'])
-    num_avg_pts = eval(op_params['num_avg_pts'])
-    
-
-    try: min_player_opp_team = int(min_player_opp_team)
-    except: pass
-    try:min_player_same_team = int(min_player_same_team)
-    except: pass
-
-    return (ownership_vers, adjust_pos_counts, matchup_drop, max_team_type, min_player_same_team, min_player_opp_team, 
-            num_top_players, own_neg_frac, player_drop_multiple, qb_min_iter, qb_set_max_team, qb_solo_start, 
-            static_top_players, num_avg_pts)
+    return rs, sim.player_data, sim, p, to_add, to_drop_selected
 
 
-def run_sim(df, _conn, sim, op_params, stack_team):
+def run_sim(df, rs, sim, params, to_drop_selected, stack_team):
+
     to_add = list(df[df.my_team==True].player.values)
     to_drop = list(df[df.exclude==True].player.values)
-
-    (ownership_vers, adjust_pos_counts, matchup_drop, max_team_type,
-    min_player_same_team, min_player_opp_team, num_top_players, own_neg_frac,
-    player_drop_multiple, qb_min_iter, qb_set_max_team, qb_solo_start, 
-    static_top_players, num_avg_pts) = extract_params(op_params)
+    to_drop = to_drop + to_drop_selected
     
     if stack_team == 'Auto': 
         set_max_team = None
     else: 
         set_max_team = stack_team
-        qb_set_max_team = False
-        matchup_drop = 0
-        qb_min_iter = 9
+        params['qb_set_max_team'] = True
+        params['matchup_drop'] = 0
+        params['qb_min_iter'] = 9
+        
+    results = rs.run_single_iter(sim, params, to_add, to_drop, set_max_team=set_max_team)
 
-    results, team_cnts = sim.run_sim(_conn, to_add, to_drop, min_players_same_team_input=min_player_same_team, set_max_team=set_max_team, 
-                                     min_players_opp_team_input=min_player_opp_team, adjust_select=adjust_pos_counts, 
-                                     max_team_type=max_team_type, num_matchup_drop=matchup_drop, own_neg_frac=own_neg_frac, 
-                                     n_top_players=num_top_players, ownership_vers=ownership_vers, static_top_players=static_top_players, 
-                                     qb_min_iter=qb_min_iter, qb_set_max_team=qb_set_max_team, qb_solo_start=qb_solo_start,
-                                     num_avg_pts=num_avg_pts)
-    return results, team_cnts
+    return results
 
 
 def show_results(results):
@@ -279,16 +242,16 @@ def show_results(results):
                 )
     
 @st.cache_data
-def auto_select(selected, _conn, _sim, op_params, stack_team):
+def auto_select(selected, _rs, _sim, cur_params, to_drop_selected, stack_team):
     
     num_selected = selected.my_team.sum()
     while num_selected < 9:
         
-        results, team_cnts = run_sim(selected, _conn, _sim, op_params, stack_team)
+        results = run_sim(selected, _rs, _sim, cur_params, to_drop_selected, stack_team)
         rm_players = selected.loc[selected.my_team==True, 'player'].unique()
         results = results[~results.player.isin(rm_players)].reset_index(drop=True)
         
-        top_n_choice = eval(op_params['top_n_choices'])
+        top_n_choice = cur_params['top_n_choices']
         top_choice = results.iloc[top_n_choice, 0]
         
         selected.loc[selected.player==top_choice, 'my_team'] = True
@@ -480,16 +443,16 @@ def main():
         if authentication_status:
             
             headings_text(name)
-            col1, col2, col3 = st.columns([4, 3, 2])
+            col1, col2, col3 = st.columns([4, 3, 3])
             
             # get current params + requirements
-            op_params = pull_op_params(db_name, week, year)
+            op_params, last_update = pull_op_params(db_name, week, year)
             pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
             team_display = init_my_team_df(pos_require_flex) 
 
             # intialize simulation
-            conn = get_conn(db_name)
-            sim, player_data = init_sim(conn, op_params, week, year, pos_require_start)
+            db_path = get_db_path(db_name)
+            rs, player_data, sim, cur_params, to_add, to_drop_selected = init_sim(db_path, op_params, week, year, pos_require_start)
             
             # get the player selection data and set to session state for auto select
             display_data = get_display_data(player_data, deta_key, week, year, username)
@@ -503,10 +466,9 @@ def main():
                 if st.button("Refresh Data"):
                     pull_op_params.clear()
                     init_sim.clear()
-                    extract_params.clear()
                     st.session_state["dd"] = get_display_data(player_data, deta_key, week, year, username)
                 
-                side_bar_labels(op_params, week, year)
+                side_bar_labels(last_update, week, year)
                 stack_team = st.selectbox('Stack Team', ['Auto']+sorted(list(player_data.team.unique())))
             
             with col1:
@@ -517,7 +479,7 @@ def main():
             with st.sidebar:
                 st.header('Auto Fill Current Team')
                 if st.button("Auto Select"):
-                    st.session_state["dd"] = auto_select(selected, conn, sim, op_params, stack_team)
+                    st.session_state["dd"] = auto_select(selected, rs, sim, cur_params, to_drop_selected, stack_team)
                     my_team = st.session_state["dd"].loc[st.session_state["dd"].my_team==True]
 
                 st.header('CSV for Draftkings')
@@ -535,7 +497,7 @@ def main():
 
             
             my_team = selected.loc[selected.my_team==True]
-            results, team_cnts = run_sim(selected, conn, sim, op_params, stack_team)
+            results = run_sim(selected, rs, sim, cur_params, to_drop_selected, stack_team)
             
             rm_players = my_team.player.unique()
             results = results[~results.player.isin(rm_players)].reset_index(drop=True)
