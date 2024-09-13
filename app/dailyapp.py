@@ -12,7 +12,7 @@ from deta import Deta
 from pathlib import Path
 
 year = 2024
-week = 1
+week = 2
 
 total_lineups = 5
 db_name = 'Simulation_App.sqlite3'
