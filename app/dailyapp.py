@@ -1,52 +1,103 @@
 #%%
 import streamlit as st
 import pandas as pd
-import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
 from zSim_Helper_Covar import FootballSimulation, RunSim
 import streamlit_authenticator as stauth
-from deta import Deta
 from pathlib import Path
+from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, select, DateTime
 
 year = 2024
 week = 3
 
 total_lineups = 5
 db_name = 'Simulation_App.sqlite3'
-deta_key = st.secrets['deta_key']
 
 
 #--------------------
-# Deta operations
+# DB operations
 #-------------------
 
-def deta_connect(deta_key):
-    return Deta(deta_key)
-
-def pull_user_list(deta_key):
-
-    deta = deta_connect(deta_key)
-    db_users = deta.Base('usersdb')
+def generate_postgres_url():
+    secrets = st.secrets["connections"]["postgresql"]
+    dialect = secrets["dialect"]
+    host = secrets["host"]
+    port = secrets["port"]
+    database = secrets["database"]
+    username = secrets["username"]
+    password = secrets["password"]
     
-    users = db_users.fetch().items
+    return f"{dialect}://{username}:{password}@{host}:{port}/{database}"
+
+def get_engine():
+    url = generate_postgres_url()
+    return create_engine(url)
+
+
+# def create_users_table():
+#     engine = get_engine()
+#     metadata = MetaData()
+    
+#     users_table = Table(
+#         'usersdb', metadata,
+#         Column('key', String, primary_key=True),
+#         Column('name', String, nullable=False),
+#         Column('password', String, nullable=False)
+#     )
+    
+#     metadata.create_all(engine)
+
+# def create_results_table():
+#     engine = get_engine()
+#     metadata = MetaData()
+    
+#     results_table = Table(
+#         'resultsdb', metadata,
+#         Column('id', String, nullable=False),
+#         Column('created_at', DateTime, nullable=False),
+#         Column('user', String, nullable=False),
+#         Column('week', Integer, nullable=False),
+#         Column('year', Integer, nullable=False),
+#         Column('pos', String, nullable=False),
+#         Column('player', String, nullable=False)
+#     )
+    
+#     metadata.create_all(engine)
+
+# # Call the function to create the table
+# create_results_table()
+# create_users_table()
+
+def pull_user_list():
+    engine = get_engine()
+    metadata = MetaData()
+    users_table = Table('usersdb', metadata, autoload_with=engine)
+    
+    with engine.connect() as conn:
+        query = select([users_table])
+        result = conn.execute(query)
+        users = result.fetchall()
+    
     credentials = {'usernames': {}}
     for user in users:
         credentials['usernames'][user['key']] = {
-                                                'email': None, 
-                                                'name': user['name'], 
-                                                'password': user['password']
-                                            }
+            'email': None, 
+            'name': user['name'], 
+            'password': user['password']
+        }
     
     return credentials
 
-def signup_new_user(deta_key):
+def signup_new_user():
+    engine = get_engine()
+    metadata = MetaData()
+    users_table = Table('usersdb', metadata, autoload_with=engine)
     
-    deta = deta_connect(deta_key)
-    db_users = deta.Base('usersdb')
-    existing_users = [ex_user['key'] for ex_user in db_users.fetch().items]
+    with engine.connect() as conn:
+        existing_users = [row['key'] for row in conn.execute(select([users_table])).fetchall()]
 
     st.subheader("Sign Up")
     new_username = st.text_input("New Username")
@@ -57,12 +108,11 @@ def signup_new_user(deta_key):
         if not new_username or not new_password:
             st.error("Please provide a username and password.")
         else:
-            # Check if the username already exists
             if new_username in existing_users:
                 st.error("Username already exists. Please choose a different one.")
             else:
-                # Save the new user in the database
-                db_users.put({'key': new_username, 'name': new_username, 'password': new_password})
+                with engine.connect() as conn:
+                    conn.execute(users_table.insert().values(key=new_username, name=new_username, password=new_password))
                 st.success("Sign up successful! You can now log in by clicking Login in the sidebar.")
 
 
@@ -131,22 +181,47 @@ def side_bar_labels(last_update, week, year):
                     st.write('Week:', str(week))
                     st.write('Year:', str(year))
 
-def show_times_selected(df, deta_key, week, year, username):
-    deta = deta_connect(deta_key)
-    db_results = deta.Base('resultsdb')
-    results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items) 
+def show_times_selected(df, week, year, username):
+    engine = get_engine()
+    metadata = MetaData()
+    results_table = Table('resultsdb', metadata, autoload_with=engine)
     
-    if results.shape[0] > 0: 
-        results = results.groupby(['player'], as_index=False).agg({'id': 'count'}).rename(columns={'id': 'num_select'})
+    with engine.connect() as conn:
+        query = select([results_table]).where(
+            (results_table.c.week == week) & 
+            (results_table.c.year == year) & 
+            (results_table.c.user == username)
+        )
+        results = pd.DataFrame(conn.execute(query).fetchall())
+    
+    if not results.empty:
+        total_lineups = len(results.id.unique())
+        results = results.groupby(['player'], as_index=False).agg({'id': 'count'}).rename(columns={'id': 'exposure'})
+        results.exposure = 100*(results.exposure / total_lineups).round(1)
         df = pd.merge(df, results, on='player', how='left').fillna(0)
     else:
-        df['num_select'] = 0
+        df['exposure'] = 0
 
     return df
 
+def show_etr_ownership(df, conn, week, year):
 
-def get_display_data(player_data, deta_key, week, year, username):
-    
+    etr_own = pd.read_sql_query(f'''SELECT player, etr_proj_large_own as etr_ownership
+                                    FROM ETR_Projections_DK
+                                    WHERE week={week}
+                                          AND year={year}
+                                          AND pos != 'DST'
+                                    UNION 
+                                    SELECT team player, etr_proj_large_own as etr_ownership
+                                    FROM ETR_Projections_DK
+                                    WHERE week={week}
+                                          AND year={year}
+                                          AND pos = 'DST'
+                                    ''', conn)
+    df = pd.merge(df, etr_own, on='player', how='left')
+    return df
+
+def get_display_data(player_data, week, year, username):
     display_data = player_data[['player', 'pos', 'salary', 'pred_fp_per_game']].sort_values(by='salary', ascending=False).reset_index(drop=True)
     
     display_data['my_team'] = False
@@ -157,7 +232,8 @@ def get_display_data(player_data, deta_key, week, year, username):
     display_data = display_data.rename(columns={'pred_fp_per_game': 'pred_pts'})
     display_data.pred_pts = display_data.pred_pts.round(1)
 
-    display_data = show_times_selected(display_data, deta_key, week, year, username)
+    display_data = show_times_selected(display_data, week, year, username)
+    display_data = show_etr_ownership(display_data, get_conn(db_name), week, year)
     
     return display_data
 
@@ -313,16 +389,15 @@ def format_df_upload(df, username):
 
     return df.loc[~df.player.isnull(),['id', 'created_at', 'user', 'week', 'year', 'pos', 'player']]
 
-def upload_results(deta_key, df):
-    
-    deta = deta_connect(deta_key)
-    db_results = deta.Base('resultsdb')
 
-    for _, row in df.iterrows():
-        cur_row = {}
-        for c in df.columns:
-            cur_row[c] = row[c]
-        db_results.put(cur_row)
+def upload_results(df):
+    engine = get_engine()
+    metadata = MetaData()
+    results_table = Table('resultsdb', metadata, autoload_with=engine)
+
+    with engine.connect() as conn:
+        for _, row in df.iterrows():
+            conn.execute(results_table.insert().values(row.to_dict()))
 
 def create_database_output(my_team, filename, week, year):
 
@@ -374,30 +449,41 @@ def pull_saved_auto_lineups(db_name, week, year, num_auto_lineups):
     return saved_lineups
 
 
-def pull_user_lineups(deta_key, week, year, username):
-    try:
-        deta = deta_connect(deta_key)
-        db_results = deta.Base('resultsdb')
-        results = pd.DataFrame(db_results.fetch({'week': week, 'year': year, 'user': username}).items)
+def pull_user_lineups(week, year, username):
+    engine = get_engine()
+    metadata = MetaData()
+    results_table = Table('resultsdb', metadata, autoload_with=engine)
     
-    except:
+    with engine.connect() as conn:
+        query = select([results_table]).where(
+            (results_table.c.week == week) & 
+            (results_table.c.year == year) & 
+            (results_table.c.user == username)
+        )
+        results = pd.DataFrame(conn.execute(query).fetchall())
+    
+    if results.empty:
         results = pd.DataFrame({'id': [], 'created_at': [], 'user': [], 'week': [], 'year': [], 'pos': [], 'player': []})
 
     return results
 
 
-def get_num_manual_lineups(deta_key, week, year, username):
-                num_manual_lineups = pull_user_lineups(deta_key, week, year, username)
-                if len(num_manual_lineups) > 0: num_manual_lineups = len(num_manual_lineups.id.unique())
-                else: num_manual_lineups = 0
-                return num_manual_lineups
+def get_num_manual_lineups(week, year, username):
+    num_manual_lineups = pull_user_lineups(week, year, username)
+    if not num_manual_lineups.empty:
+        num_manual_lineups = len(num_manual_lineups.id.unique())
+    else:
+        num_manual_lineups = 0
+    return num_manual_lineups
 
-def download_saved_teams(deta_key, filename, week, year, username, num_auto_lineups):
-    if num_auto_lineups > 0: auto_lineups = pull_saved_auto_lineups(filename, week, year, num_auto_lineups)
-    else: auto_lineups = pd.DataFrame()
+def download_saved_teams(filename, week, year, username, num_auto_lineups):
+    if num_auto_lineups > 0:
+        auto_lineups = pull_saved_auto_lineups(filename, week, year, num_auto_lineups)
+    else:
+        auto_lineups = pd.DataFrame()
     
     try:
-        results = pull_user_lineups(deta_key, week, year, username)
+        results = pull_user_lineups(week, year, username)
          
         save_result = pd.DataFrame()
         for r in results['id'].unique():
@@ -412,7 +498,6 @@ def download_saved_teams(deta_key, filename, week, year, username, num_auto_line
         return save_result.to_csv().encode('utf-8')
     
     except:
-    
         st.write('No saved teams yet!')
         return pd.DataFrame().to_csv().encode('utf-8')
     
@@ -430,11 +515,11 @@ def main():
         choice = st.radio("Menu", menu, label_visibility='collapsed')
         
     if choice == "SignUp":
-        signup_new_user(deta_key)
+        signup_new_user()
     
     elif choice == 'Login':
         
-        credentials = pull_user_list(deta_key)
+        credentials = pull_user_list()
         name, authentication_status, username, authenticator = authenticate_user(credentials)
 
         if authentication_status == False: st.error('Username/password is incorrect')
@@ -443,7 +528,7 @@ def main():
         if authentication_status:
             
             headings_text(name)
-            col1, col2, col3 = st.columns([4, 3, 3])
+            col1, col2, col3 = st.columns([5, 4 , 3])
             
             # get current params + requirements
             op_params, last_update = pull_op_params(db_name, week, year)
@@ -455,7 +540,7 @@ def main():
             rs, player_data, sim, cur_params, to_add, to_drop_selected = init_sim(db_path, op_params, week, year, pos_require_start)
             
             # get the player selection data and set to session state for auto select
-            display_data = get_display_data(player_data, deta_key, week, year, username)
+            display_data = get_display_data(player_data, week, year, username)
             if "dd" not in st.session_state: 
                 st.session_state["dd"] = display_data
 
@@ -466,7 +551,7 @@ def main():
                 if st.button("Refresh Data"):
                     pull_op_params.clear()
                     init_sim.clear()
-                    st.session_state["dd"] = get_display_data(player_data, deta_key, week, year, username)
+                    st.session_state["dd"] = get_display_data(player_data, week, year, username)
                 
                 side_bar_labels(last_update, week, year)
                 stack_team = st.selectbox('Stack Team', ['Auto']+sorted(list(player_data.team.unique())))
@@ -484,12 +569,12 @@ def main():
 
                 st.header('CSV for Draftkings')
                 
-                num_manual_lineups = get_num_manual_lineups(deta_key, week, year, username)
+                num_manual_lineups = get_num_manual_lineups(week, year, username)
                 st.write('Number Manual Lineups:', num_manual_lineups)
                 num_auto_lineups = st.number_input('Number Auto Lineups', min_value=0, max_value=100, value=20, step=1)
                 st.download_button(
                         "Download Saved Teams",
-                        download_saved_teams(deta_key, db_name, week, year, username, num_auto_lineups),
+                        download_saved_teams(db_name, week, year, username, num_auto_lineups),
                         f"week{week}_year{year}_saved_teams.csv",
                         "text/csv",
                         key='download-csv'
@@ -524,7 +609,7 @@ def main():
                 with subcol3:
                     if st.button("Save Team"):
                         my_team_upload = format_df_upload(my_team, username)
-                        upload_results(deta_key, my_team_upload) 
+                        upload_results(my_team_upload) 
                         st.text('Team Saved!')
 
 if __name__ == '__main__':
