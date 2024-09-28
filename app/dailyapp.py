@@ -206,13 +206,13 @@ def show_times_selected(df, week, year, username):
 
 def show_etr_ownership(df, conn, week, year):
 
-    etr_own = pd.read_sql_query(f'''SELECT player, etr_proj_large_own as etr_ownership
+    etr_own = pd.read_sql_query(f'''SELECT player, opp, etr_proj_large_own as etr_ownership
                                     FROM ETR_Projections_DK
                                     WHERE week={week}
                                           AND year={year}
                                           AND pos != 'DST'
                                     UNION 
-                                    SELECT team player, etr_proj_large_own as etr_ownership
+                                    SELECT team player, opp, etr_proj_large_own as etr_ownership
                                     FROM ETR_Projections_DK
                                     WHERE week={week}
                                           AND year={year}
@@ -234,7 +234,7 @@ def get_display_data(player_data, week, year, username):
 
     display_data = show_times_selected(display_data, week, year, username)
     display_data = show_etr_ownership(display_data, get_conn(db_name), week, year)
-    
+    display_data = display_data[['player', 'pos', 'opp', 'salary', 'pred_pts', 'my_team', 'exclude', 'etr_ownership', 'exposure']]
     return display_data
 
 def update_interactive_grid(data):
