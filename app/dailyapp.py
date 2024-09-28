@@ -528,7 +528,7 @@ def main():
         if authentication_status:
             
             headings_text(name)
-            col1, col2, col3 = st.columns([5, 3.5, 3])
+            col1, col2, col3 = st.columns([5, 3, 3])
             
             # get current params + requirements
             op_params, last_update = pull_op_params(db_name, week, year)
