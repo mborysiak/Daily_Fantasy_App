@@ -197,7 +197,7 @@ def show_times_selected(df, week, year, username):
     if not results.empty:
         total_lineups = len(results.id.unique())
         results = results.groupby(['player'], as_index=False).agg({'id': 'count'}).rename(columns={'id': 'exposure'})
-        results.exposure = 100*(results.exposure / total_lineups).round(1)
+        results.exposure = 100*(results.exposure / total_lineups).round(2)
         df = pd.merge(df, results, on='player', how='left').fillna(0)
     else:
         df['exposure'] = 0
