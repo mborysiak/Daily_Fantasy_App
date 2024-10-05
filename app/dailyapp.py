@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
-from zSim_Helper_Covar import FootballSimulation, RunSim
+from zSim_Helper_Covar_NewFeatures import FootballSimulation, RunSim
 import streamlit_authenticator as stauth
 from pathlib import Path
 from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, select, DateTime
