@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, 
 
 year = 2024
 week = 5
-
+# x=1
 total_lineups = 5
 db_name = 'Simulation_App.sqlite3'
 
