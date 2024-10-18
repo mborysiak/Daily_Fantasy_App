@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
-from zSim_Helper_Covar_NewFeatures import FootballSimulation, RunSim
+from zSim_Helper_Covar_New import FullLineupSim, RunSim
 import streamlit_authenticator as stauth
 from pathlib import Path
 from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, select, DateTime
@@ -148,7 +148,7 @@ def pull_sim_requirements():
     pos_require_flex['DEF'] = 1
     total_pos = np.sum(list(pos_require_flex.values()))
     
-    return pos_require_start, pos_require_flex, total_pos
+    return pos_require_flex, total_pos
 
 @st.cache_data
 def pull_op_params(filename, week, year):
@@ -261,7 +261,7 @@ def update_interactive_grid(data):
 
 
 @st.cache_resource
-def init_sim(db_path, op_params, week, year, pos_require_start):
+def init_sim(db_path, op_params, week, year):
 
     pred_vers = op_params['pred_vers']
     reg_ens_vers = op_params['reg_ens_vers']
@@ -274,30 +274,33 @@ def init_sim(db_path, op_params, week, year, pos_require_start):
     for k, v in op_params.items():
         op_params[k] = eval(v)
 
-    rs = RunSim(db_path, week, year, 50000, pos_require_start, pred_vers, reg_ens_vers, million_ens_vers, std_dev_type, 1)
+    rs = RunSim(db_path, week, year, pred_vers, reg_ens_vers, million_ens_vers, std_dev_type, 1)
     params = rs.generate_param_list(op_params)
-    sim, p, to_add, to_drop_selected = rs.setup_sim(params[0], existing_players=[])
+    sim, p = rs.setup_sim(params[0])
 
-    return rs, sim.player_data, sim, p, to_add, to_drop_selected
+    return rs, sim.player_data, sim, p
 
 
-def run_sim(df, rs, sim, params, to_drop_selected, stack_team):
+def create_previous_lineups(week, year, username):
+    previous_lineups = []
+    user_lineups = pull_user_lineups(week, year, username)
+    for i in user_lineups.id.unique():
+        previous_lineups.append(list(user_lineups[user_lineups.id==i].player.values))
+    return previous_lineups
+
+def run_sim(df, rs, sim, params):
 
     to_add = list(df[df.my_team==True].player.values)
     to_drop = list(df[df.exclude==True].player.values)
-    to_drop = to_drop + to_drop_selected
     
-    if stack_team == 'Auto': 
-        set_max_team = None
-    else: 
-        set_max_team = stack_team
-        params['qb_set_max_team'] = True
-        params['matchup_drop'] = 0
-        params['qb_min_iter'] = 9
-        
-    results = rs.run_single_iter(sim, params, to_add, to_drop, set_max_team=set_max_team)
+    if st.session_state["full_lineup"]: params['num_iters'] = 1
+    else: params['num_iters'] = 100
 
-    return results
+    st.write(st.session_state['previous_lineups'])
+
+    full_lineup, player_cnts = rs.run_single_iter(sim, params, to_add, to_drop, st.session_state['previous_lineups'])
+
+    return full_lineup, player_cnts
 
 
 def show_results(results):
@@ -317,24 +320,6 @@ def show_results(results):
                     use_container_width=True
                 )
     
-@st.cache_data
-def auto_select(selected, _rs, _sim, cur_params, to_drop_selected, stack_team):
-    
-    num_selected = selected.my_team.sum()
-    while num_selected < 9:
-        
-        results = run_sim(selected, _rs, _sim, cur_params, to_drop_selected, stack_team)
-        rm_players = selected.loc[selected.my_team==True, 'player'].unique()
-        results = results[~results.player.isin(rm_players)].reset_index(drop=True)
-        
-        top_n_choice = cur_params['top_n_choices']
-        top_choice = results.iloc[top_n_choice, 0]
-        
-        selected.loc[selected.player==top_choice, 'my_team'] = True
-        num_selected = selected.my_team.sum()
-        #st.write(f'{top_choice} added to team. {num_selected}/9 selected.')
-    
-    return selected
 
 def init_my_team_df(pos_require):
 
@@ -532,17 +517,16 @@ def main():
             
             # get current params + requirements
             op_params, last_update = pull_op_params(db_name, week, year)
-            pos_require_start, pos_require_flex, total_pos = pull_sim_requirements()
+            pos_require_flex, total_pos = pull_sim_requirements()
             team_display = init_my_team_df(pos_require_flex) 
 
             # intialize simulation
             db_path = get_db_path(db_name)
-            rs, player_data, sim, cur_params, to_add, to_drop_selected = init_sim(db_path, op_params, week, year, pos_require_start)
+            rs, player_data, sim, cur_params = init_sim(db_path, op_params, week, year)
             
             # get the player selection data and set to session state for auto select
             display_data = get_display_data(player_data, week, year, username)
-            if "dd" not in st.session_state: 
-                st.session_state["dd"] = display_data
+            if "dd" not in st.session_state: st.session_state["dd"] = display_data
 
             with st.sidebar:
                 authenticator.logout('Logout', 'main')
@@ -552,9 +536,17 @@ def main():
                     pull_op_params.clear()
                     init_sim.clear()
                     st.session_state["dd"] = get_display_data(player_data, week, year, username)
+                    st.session_state['previous_lineups'] = create_previous_lineups(week, year, username)
+
+                st.header("Full Lineup or Player-by-Player")
+                lineup_type = st.radio(
+                        label='Choose how to fill in your lineup',
+                        options=["Full Lineup", "Player-by-Player"]
+                    )
+                if lineup_type == "Full Lineup": st.session_state["full_lineup"] = True
+                else: st.session_state["full_lineup"] = False
                 
                 side_bar_labels(last_update, week, year)
-                stack_team = st.selectbox('Stack Team', ['Auto']+sorted(list(player_data.team.unique())))
             
             with col1:
                 st.header('1. Choose Players')
@@ -562,11 +554,7 @@ def main():
                 selected = update_interactive_grid(st.session_state["dd"])
             
             with st.sidebar:
-                st.header('Auto Fill Current Team')
-                if st.button("Auto Select"):
-                    st.session_state["dd"] = auto_select(selected, rs, sim, cur_params, to_drop_selected, stack_team)
-                    my_team = st.session_state["dd"].loc[st.session_state["dd"].my_team==True]
-
+            
                 st.header('CSV for Draftkings')
                 
                 num_manual_lineups = get_num_manual_lineups(week, year, username)
@@ -580,12 +568,19 @@ def main():
                         key='download-csv'
                 )
 
+            if 'previous_lineups' not in st.session_state:
+                st.session_state['previous_lineups'] = create_previous_lineups(week, year, username)
+
+            full_lineup, results = run_sim(selected, rs, sim, cur_params)
             
-            my_team = selected.loc[selected.my_team==True]
-            results = run_sim(selected, rs, sim, cur_params, to_drop_selected, stack_team)
-            
-            rm_players = my_team.player.unique()
-            results = results[~results.player.isin(rm_players)].reset_index(drop=True)
+            if st.session_state["full_lineup"]:
+                my_team = selected[selected.player.isin(full_lineup)].copy()
+                selected.loc[selected.player.isin(full_lineup), 'my_team'] = True
+
+            else: 
+                my_team = selected.loc[selected.my_team==True]
+                rm_players = my_team.player.unique()
+                results = results[~results.player.isin(rm_players)].reset_index(drop=True)
 
             with col2: 
                 st.header('2. Review Top Choices')
@@ -611,6 +606,9 @@ def main():
                         my_team_upload = format_df_upload(my_team, username)
                         upload_results(my_team_upload) 
                         st.text('Team Saved!')
+
+                if st.session_state["full_lineup"]:
+                    st.session_state['last_lineup'] = my_team
 
 if __name__ == '__main__':
     main()
