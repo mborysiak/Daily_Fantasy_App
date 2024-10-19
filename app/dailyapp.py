@@ -294,9 +294,7 @@ def run_sim(df, rs, sim, params):
     to_drop = list(df[df.exclude==True].player.values)
     
     if st.session_state["full_lineup"]: params['num_iters'] = 1
-    else: params['num_iters'] = 100
-
-    st.write(st.session_state['previous_lineups'])
+    else: params['num_iters'] = 25
 
     full_lineup, player_cnts = rs.run_single_iter(sim, params, to_add, to_drop, st.session_state['previous_lineups'])
 
@@ -527,6 +525,8 @@ def main():
             # get the player selection data and set to session state for auto select
             display_data = get_display_data(player_data, week, year, username)
             if "dd" not in st.session_state: st.session_state["dd"] = display_data
+            if 'my_team' not in st.session_state: st.session_state['my_team'] = None
+            if 'save_click' not in st.session_state: st.session_state['save_click'] = False
 
             with st.sidebar:
                 authenticator.logout('Logout', 'main')
@@ -537,6 +537,9 @@ def main():
                     init_sim.clear()
                     st.session_state["dd"] = get_display_data(player_data, week, year, username)
                     st.session_state['previous_lineups'] = create_previous_lineups(week, year, username)
+                    st.session_state['my_team'] = None
+                    st.session_state['save_click'] = False
+
 
                 st.header("Full Lineup or Player-by-Player")
                 lineup_type = st.radio(
@@ -547,6 +550,19 @@ def main():
                 else: st.session_state["full_lineup"] = False
                 
                 side_bar_labels(last_update, week, year)
+
+            with col3:
+                subcol1, subcol2 = st.columns(2)
+                with subcol1:
+                    st.header("⚡:green[Your Team]⚡")  
+                    st.write('*Players selected so far 🏈*')
+                with subcol2:
+                    st.header('')
+                    if st.button("Save Team", type='primary', use_container_width=True):
+                        my_team_upload = format_df_upload(st.session_state['my_team'], username)
+                        st.session_state['save_click'] = True
+                        upload_results(my_team_upload) 
+                        st.text('Team Saved! Refresh Data.')
             
             with col1:
                 st.header('1. Choose Players')
@@ -570,17 +586,22 @@ def main():
 
             if 'previous_lineups' not in st.session_state:
                 st.session_state['previous_lineups'] = create_previous_lineups(week, year, username)
-
-            full_lineup, results = run_sim(selected, rs, sim, cur_params)
             
-            if st.session_state["full_lineup"]:
-                my_team = selected[selected.player.isin(full_lineup)].copy()
+            if not st.session_state['save_click']:
+                full_lineup, results = run_sim(selected, rs, sim, cur_params)
+            
+            if st.session_state["full_lineup"] and not st.session_state['save_click']:
+                st.session_state['my_team'] = selected[selected.player.isin(full_lineup)].copy()
                 selected.loc[selected.player.isin(full_lineup), 'my_team'] = True
-
-            else: 
-                my_team = selected.loc[selected.my_team==True]
-                rm_players = my_team.player.unique()
+            
+            elif not st.session_state['save_click']: 
+                st.session_state['my_team'] = selected.loc[selected.my_team==True]
+                rm_players = st.session_state['my_team'].player.unique()
                 results = results[~results.player.isin(rm_players)].reset_index(drop=True)
+            
+            else:
+                results = pd.DataFrame()
+
 
             with col2: 
                 st.header('2. Review Top Choices')
@@ -588,27 +609,16 @@ def main():
                 show_results(results)
 
             with col3:      
-                st.header("⚡:green[Your Team]⚡")  
-                st.write('*Players selected so far 🏈*')
                 
-                try: st.table(team_fill(team_display, my_team))
+                try: st.table(team_fill(team_display, st.session_state['my_team']))
                 except: st.table(team_display)
 
                 subcol1, subcol2, subcol3 = st.columns(3)
-                remaining_salary = 50000-my_team.salary.sum()
-                subcol1.metric('Remaining Salary', remaining_salary)
+                remaining_salary = 50000-st.session_state['my_team'].salary.sum()
+                subcol2.metric('Remaining Salary', remaining_salary)
                 
-                if total_pos-len(my_team) > 0: subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(my_team))))
-                else: subcol2.metric('Per Player', 'N/A')
-                
-                with subcol3:
-                    if st.button("Save Team"):
-                        my_team_upload = format_df_upload(my_team, username)
-                        upload_results(my_team_upload) 
-                        st.text('Team Saved!')
-
-                if st.session_state["full_lineup"]:
-                    st.session_state['last_lineup'] = my_team
+                if total_pos-len(st.session_state['my_team']) > 0: subcol2.metric('Per Player', int(remaining_salary / (total_pos-len(st.session_state['my_team']))))
+                else: subcol3.metric('Per Player', 'N/A')
 
 if __name__ == '__main__':
     main()
