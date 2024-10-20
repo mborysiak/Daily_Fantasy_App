@@ -314,7 +314,7 @@ class FullLineupSim:
 
     def run_sim(self, conn, to_add, to_drop, num_iters, ownership_vers, num_options, num_avg_pts, pos_or_neg,
                 qb_wr_stack, qb_te_stack, min_opp_team, max_teams_lineup,max_salary_remain,
-                max_overlap, prev_qb_wt, previous_lineups):
+                max_overlap, prev_qb_wt, prev_def_wt, previous_lineups, wr_flex_pct, rb_flex_pct):
         
         self.conn = conn
         self.prepare_data(ownership_vers, num_options, pos_or_neg)
@@ -329,13 +329,13 @@ class FullLineupSim:
             
             while not success and iters_run < 5:
 
-                self.set_position_counts()
+                self.set_position_counts(wr_flex_pct, rb_flex_pct)
                 iters_run += 1
                 cur_pred_fps = self.sample_points(num_options, num_avg_pts)
                 cur_ownership = self.sample_ownership(num_options, num_avg_pts)
                 c, A, b, G, h = self.setup_optimization_problem(to_add, to_drop, cur_pred_fps, cur_ownership, qb_wr_stack, qb_te_stack, 
                                                                 min_opp_team, max_teams_lineup, max_salary_remain,
-                                                                max_overlap, prev_qb_wt, previous_lineups)
+                                                                max_overlap, prev_qb_wt, prev_def_wt, previous_lineups)
                 
                 status, x = self.solve_optimization(c, G, h, A, b)
                 
@@ -387,14 +387,15 @@ class FullLineupSim:
 
         self.ownerships = self.get_predictions('pred_ownership', ownership=True, num_options=num_options+1)
 
-    def set_position_counts(self):
-        flex_pos = np.random.choice(['RB', 'WR', 'TE'], p=[0.37, 0.51, 0.12])
+    def set_position_counts(self, wr_flex_pct, rb_flex_pct):
+        flex_pos = np.random.choice(['RB', 'WR', 'TE'], p=[rb_flex_pct, wr_flex_pct, 1 - rb_flex_pct - wr_flex_pct])
+        # flex_pos = np.random.choice(['RB', 'WR', 'TE'], p=[0.37, 0.51, 0.12])
         self.position_counts = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'DEF': 1}
         self.position_counts[flex_pos] += 1
         self.num_pos = float(np.sum(list(self.position_counts.values())))
 
     def setup_optimization_problem(self, to_add, to_drop, cur_pred_fps, cur_ownership, qb_wr_stack, qb_te_stack, min_opp_team, 
-                                   max_teams_lineup, max_salary_remain, max_overlap, prev_qb_wt, previous_lineups):
+                                   max_teams_lineup, max_salary_remain, max_overlap, prev_qb_wt, prev_def_wt, previous_lineups):
         
         n_variables = self.n_players + len(self.unique_teams)
         
@@ -402,7 +403,7 @@ class FullLineupSim:
         A, b = self.create_equality_constraints()
         G, h = self.create_inequality_constraints(to_add, to_drop, cur_ownership, n_variables, qb_wr_stack, qb_te_stack, 
                                                   min_opp_team, max_teams_lineup, max_salary_remain,
-                                                  max_overlap, prev_qb_wt, previous_lineups)
+                                                  max_overlap, prev_qb_wt, prev_def_wt, previous_lineups)
         return c, A, b, G, h
 
     def create_objective_function(self, cur_pred_fps):
@@ -426,7 +427,7 @@ class FullLineupSim:
 
     def create_inequality_constraints(self, to_add, to_drop, cur_ownership, n_variables, qb_wr_stack, qb_te_stack, 
                                       min_opp_team, max_teams_lineup, max_salary_remain, max_overlap, prev_qb_wt,
-                                      previous_lineups):
+                                      prev_def_wt, previous_lineups):
         G = []
         h = []
 
@@ -440,7 +441,7 @@ class FullLineupSim:
             self.add_stacking_constraints(G, h, n_variables, qb_wr_stack, qb_te_stack)
             self.add_opposing_team_constraint(G, h, n_variables, min_opp_team)
             self.add_max_teams_constraint(G, h, n_variables, max_teams_lineup)
-            self.add_overlap_constraint(G, h, n_variables, max_overlap, previous_lineups, prev_qb_wt)
+            self.add_overlap_constraint(G, h, n_variables, max_overlap, previous_lineups, prev_qb_wt, prev_def_wt)
             
         return matrix(np.array(G), tc='d'), matrix(h, tc='d')
     
@@ -554,13 +555,15 @@ class FullLineupSim:
         G.append([0] * self.n_players + [1] * len(self.unique_teams))
         h.append(float(max_teams_lineup))
 
-    def add_overlap_constraint(self, G, h, n_variables, max_overlap, previous_lineups, prev_qb_wt):
+    def add_overlap_constraint(self, G, h, n_variables, max_overlap, previous_lineups, prev_qb_wt, prev_def_wt):
         for prev_lineup in previous_lineups:
             constraint = [0] * n_variables
             for i, (player, position) in enumerate(zip(self.players, self.positions)):
                 if player in prev_lineup:
                     if position == 'QB':
                         constraint[i] = prev_qb_wt
+                    elif position == 'DEF':
+                        constraint[i] = prev_def_wt
                     else:
                         constraint[i] = 1
             G.append(constraint)
@@ -716,7 +719,7 @@ class RunSim:
         self.col_ordering = ['full_model_rel_weight', 'covar_type', 'num_iters', 'ownership_vers_variable', 
                              'ownership_vers',  'num_options', 'num_avg_pts',
                              'pos_or_neg', 'qb_wr_stack', 'qb_te_stack', 'min_opp_team', 'max_teams_lineup',
-                             'max_salary_remain', 'max_overlap', 'prev_qb_wt']
+                             'max_salary_remain', 'max_overlap', 'prev_qb_wt', 'prev_def_wt', 'wr_flex_pct', 'rb_flex_pct']
         
         try:
             stats_conn = sqlite3.connect(f'{db_path}/FastR.sqlite3', timeout=60)
@@ -835,7 +838,8 @@ class RunSim:
         while last_lineup is None and i < 10:
             last_lineup, player_cnts = sim.run_sim(conn, to_add, to_drop, p['num_iters'], own_vers, p['num_options'], p['num_avg_pts'],
                                                 p['pos_or_neg'], p['qb_wr_stack'], p['qb_te_stack'], p['min_opp_team'], p['max_teams_lineup'],
-                                                p['max_salary_remain'], p['max_overlap'], p['prev_qb_wt'], previous_lineups)
+                                                p['max_salary_remain'], p['max_overlap'], p['prev_qb_wt'], p['prev_def_wt'], previous_lineups,
+                                                p['wr_flex_pct'], p['rb_flex_pct'])
             i += 1
         conn.close() 
         player_cnts = player_cnts[~player_cnts.player.isin(to_add)].reset_index(drop=True)
@@ -902,7 +906,7 @@ class RunSim:
 
 # week = 6
 # year = 2024
-# total_lineups = 50
+# total_lineups = 10
 
 # model_vers = {
 #             'million_ens_vers': 'random_full_stack_newp_matt0_brier1_include2_kfold3',
@@ -932,9 +936,12 @@ class RunSim:
 #                         'standard_ln': 0.4},
 #     'max_teams_lineup': {8: 0.4, 6: 0.4, 4: 0.2},
 #     'max_salary_remain': {500: 1},
-#     'max_overlap': {7: 1}, 
+#     'max_overlap': {9: 1}, 
 #     'min_opp_team': {0: 0.3, 1: 0.5, 2: 0.2},
-#     'prev_qb_wt': {1: 1}
+#     'prev_qb_wt': {1: 1},
+#     'prev_def_wt': {9: 1},
+#     'wr_flex_pct': {0: 1},
+#     'rb_flex_pct': {1: 1},
 #     }
 
 # print(f'Running week {week} for year {year}')
@@ -944,19 +951,27 @@ class RunSim:
 # million_ens_vers = model_vers['million_ens_vers']
 # std_dev_type = model_vers['std_dev_type']
 
-# path = 'C:/Users/mborysia/OneDrive - Starbucks/Documents/Github/Simulation/'
+# path = 'C:/Users/borys/OneDrive/Documents/Github/Daily_Fantasy/Data/Databases/'
 # rs = RunSim(path, week, year, pred_vers, reg_ens_vers, million_ens_vers, std_dev_type, total_lineups)
 # params = rs.generate_param_list(d)
 
 
-#%%
+# #%%
 # sim, p = rs.setup_sim(params[0])
 
 # to_add = []
 # to_drop = []
-# previous_lineups = []
+# previous_lineups = [['Trey Mcbride',
+#   'Drake London',
+#   'Jerome Ford',
+#   'Bucky Irving',
+#   'TB',
+#   'Dontayvion Wicks',
+#   'Jayden Reed',
+#   'Jordan Love',
+#   'Tyjae Spears']]
 # rs.run_single_iter(sim, p, to_add, to_drop,previous_lineups)
 
-#%%
+# #%%
 
 # rs.run_multiple_lineups(params)
