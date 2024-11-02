@@ -5,13 +5,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 import sqlite3
-from zSim_Helper_Covar_New import FullLineupSim, RunSim
+from zSim_Helper_Covar import FullLineupSim, RunSim
 import streamlit_authenticator as stauth
 from pathlib import Path
 from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, select, DateTime
 
 year = 2024
-week = 8
+week = 9
 total_lineups = 10
 db_name = 'Simulation_App.sqlite3'
 
