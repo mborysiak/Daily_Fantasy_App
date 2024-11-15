@@ -426,7 +426,7 @@ def pull_saved_auto_lineups(db_name, week, year, num_auto_lineups):
                                        ''', conn)
     
     num_auto_lineups = np.min([num_auto_lineups, saved_lineups.shape[0]])
-    saved_lineups = saved_lineups.sample(n=num_auto_lineups).reset_index(drop=True)
+    saved_lineups = saved_lineups.sample(n=num_auto_lineups).drop(['week', 'year', 'lineup_num', 'trial_num']).reset_index(drop=True)
     
     return saved_lineups
 
