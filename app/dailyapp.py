@@ -10,8 +10,8 @@ import streamlit_authenticator as stauth
 from pathlib import Path
 from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, select, DateTime
 
-year = 2024
-week = 19
+year = 2025
+week = 1
 total_lineups = 10
 db_name = 'Simulation_App.sqlite3'
 
@@ -258,26 +258,26 @@ def update_interactive_grid(data):
         )
     return selected
 
-
 @st.cache_resource
 def init_sim(db_path, op_params, week, year):
 
     pred_vers = op_params['pred_vers']
     reg_ens_vers = op_params['reg_ens_vers']
-    std_dev_type = op_params['std_dev_type']
     million_ens_vers = op_params['million_ens_vers']
 
-    for k in ['week', 'year', 'pred_vers', 'reg_ens_vers', 'std_dev_type', 'million_ens_vers', 'last_update']:
+    for k in ['week', 'year', 'pred_vers', 'reg_ens_vers', 'million_ens_vers', 'last_update']:
         op_params.pop(k, None)
 
     for k, v in op_params.items():
-        op_params[k] = eval(v)
-
-    rs = RunSim(db_path, week, year, pred_vers, reg_ens_vers, million_ens_vers, std_dev_type, 1)
+        try: op_params[k] = float(v)
+        except: op_params[k] = eval(v)
+    
+    rs = RunSim(db_path, week, year, pred_vers, reg_ens_vers, million_ens_vers, 1)
     params = rs.generate_param_list(op_params)
     sim, p = rs.setup_sim(params[0])
+    _, _ = rs.run_single_iter(sim, p, [], [],[])
 
-    return rs, sim.player_data, sim, p
+    return rs, rs.player_data, sim, p
 
 
 def create_previous_lineups(week, year, username):

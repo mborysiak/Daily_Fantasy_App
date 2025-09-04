@@ -1,76 +1,72 @@
 #%%
-from itertools import combinations
 import pandas as pd
 import numpy as np
-from cvxopt import matrix, solvers
+from cvxopt import matrix
 from cvxopt.glpk import ilp
-from scipy.stats import beta
-import random
 import sqlite3
 import gc
 
 class FullLineupSim:
     def __init__(self, week, year, conn, pred_vers, reg_ens_vers, million_ens_vers,
-                 std_dev_type, full_model_rel_weight, use_covar, covar_type, print_results):
+                 use_covar, covar_type, print_results):
 
         self.week = week
         self.set_year = year
         self.pred_vers = pred_vers
         self.reg_ens_vers = reg_ens_vers
         self.million_ens_vers = million_ens_vers
-        self.std_dev_type = std_dev_type
         self.conn = conn
-        self.full_model_rel_weight = full_model_rel_weight
         self.use_covar = use_covar
         self.salary_cap = 50000
         self.covar_type = covar_type
         self.print_results = print_results
         self.num_pos = 9
-        
-        
-        if self.use_covar: 
-            player_data = self.get_covar_means()
-            self.covar = self.pull_covar()
-        else:
-            player_data = self.get_model_predictions()
-
-        self.player_data = self.join_salary(player_data)
-        self.player_data = self.join_opp(self.player_data)
-        self.opponents = self.get_matchups()
-
 
     def get_model_predictions(self):
-        df = pd.read_sql_query(f'''SELECT * 
-                                    FROM Model_Predictions
+
+        if self.opt_metric == 'points':
+            table_name = 'Points_Predictions'
+            metric_name = 'pred_fp_per_game'
+            metric_ens_vers = self.reg_ens_vers
+            std_dev_query = f"AND std_dev_type='{self.std_dev_type}'"
+        elif self.opt_metric == 'roi':
+            table_name = 'ROI_Predictions'
+            metric_name = 'pred_roi'
+            metric_ens_vers = self.million_ens_vers
+            std_dev_query = ''
+        elif self.opt_metric == 'roitop':
+            table_name = 'ROI_Top_Predictions'
+            metric_name = 'pred_roitop'
+            metric_ens_vers = self.million_ens_vers
+            std_dev_query = ''
+        elif self.opt_metric == 'million':
+            table_name = 'Million_Predictions'
+            metric_name = 'pred_million'
+            metric_ens_vers = self.million_ens_vers
+            std_dev_query = ''
+
+        df = pd.read_sql_query(f'''SELECT player, 
+                                          pos, 
+                                          {metric_name} pred_fp_per_game, 
+                                          std_dev, 
+                                          min_score, 
+                                          max_score
+                                    FROM {table_name}
                                     WHERE week={self.week}
                                         AND year={self.set_year}
                                         AND pred_vers='{self.pred_vers}'
-                                        AND reg_ens_vers='{self.reg_ens_vers}'
-                                        AND std_dev_type='{self.std_dev_type}'
+                                        AND ens_vers='{metric_ens_vers}'
+                                        {std_dev_query}
                                         AND pos !='K'
                                         AND pos IS NOT NULL
                                         AND player!='Ryan Griffin'
                     
                                 ''', self.conn)
-        df['weighting'] = 1
-        df.loc[df.model_type=='full_model', 'weighting'] = self.full_model_rel_weight
 
-        score_cols = ['pred_fp_per_game', 'std_dev', 'min_score', 'max_score']
-        for c in score_cols: 
-            df[c] = df[c] * df.weighting
-
-        # Groupby and aggregate with namedAgg [1]:
-        df = df.groupby(['player', 'pos'], as_index=False).agg({'pred_fp_per_game': 'sum', 
-                                                                'std_dev': 'sum',
-                                                                'weighting': 'sum',
-                                                                'min_score': 'sum',
-                                                                'max_score': 'sum'})
-
-        for c in score_cols: df[c] = df[c] / df.weighting
         df.loc[df.pos=='Defense', 'pos'] = 'DEF'
         teams = pd.read_sql_query(f'''SELECT player, team 
-                                        FROM Player_Teams 
-                                        WHERE week={self.week} 
+                                      FROM Player_Teams 
+                                      WHERE week={self.week} 
                                             AND year={self.set_year}
                                     ''', 
                                     self.conn)
@@ -79,7 +75,11 @@ class FullLineupSim:
         drop_teams = self.get_drop_teams()
         df = df[~df.team.isin(drop_teams)].reset_index(drop=True)
 
-        return df.drop('weighting', axis=1)
+        for c in ['pred_fp_per_game', 'std_dev', 'min_score', 'max_score']:
+            min_value = df.loc[df[c] > 0, c].min()
+            df.loc[df[c].isnull() | (df[c] <= 0), c] = min_value
+
+        return df
     
     
             
@@ -93,7 +93,7 @@ class FullLineupSim:
                                                     AND reg_ens_vers='{self.reg_ens_vers}'
                                                     AND std_dev_type='{self.std_dev_type}'
                                                     AND covar_type='{self.covar_type}' 
-                                                    AND full_model_rel_weight={self.full_model_rel_weight}''', 
+                                                    ''', 
                                              self.conn)
         return player_data
 
@@ -106,7 +106,7 @@ class FullLineupSim:
                                             AND reg_ens_vers='{self.reg_ens_vers}'
                                             AND std_dev_type='{self.std_dev_type}'
                                             AND covar_type='{self.covar_type}'
-                                            AND full_model_rel_weight={self.full_model_rel_weight} ''', 
+                                            ''', 
                                        self.conn)
         covar = pd.pivot_table(covar, index='player', columns='player_two').reset_index().fillna(0)
         covar.columns = [c[1] if i!=0 else 'player' for i, c in enumerate(covar.columns)]
@@ -117,9 +117,9 @@ class FullLineupSim:
 
         # add salaries to the dataframe and set index to player
         salaries = pd.read_sql_query(f'''SELECT player, salary
-                                        FROM Salaries
-                                        WHERE year={self.set_year}
-                                            AND week={self.week} ''', 
+                                         FROM Salaries
+                                         WHERE year={self.set_year}
+                                               AND week={self.week} ''', 
                                         self.conn)
 
         df = pd.merge(df, salaries, how='left', left_on='player', right_on='player')
@@ -136,9 +136,9 @@ class FullLineupSim:
     def get_drop_teams(self):
 
         df = pd.read_sql_query(f'''SELECT away_team, home_team, gametime 
-                                    FROM Gambling_Lines 
-                                    WHERE week={self.week} 
-                                            and year={self.set_year} 
+                                   FROM Gambling_Lines 
+                                   WHERE week={self.week} 
+                                         AND year={self.set_year} 
                     ''', self.conn)
         df.gametime = pd.to_datetime(df.gametime)
         df['day_of_week'] = df.gametime.apply(lambda x: x.weekday())
@@ -169,7 +169,7 @@ class FullLineupSim:
     def join_ownership_pred(self, df):
 
         # add salaries to the dataframe and set index to player
-        ownership = pd.read_sql_query(f'''SELECT player, pred_ownership, std_dev+0.01 as std_dev, min_score, max_score
+        ownership = pd.read_sql_query(f'''SELECT player, pred_ownership, std_dev, min_score, max_score
                                           FROM Predicted_Ownership
                                           WHERE year={self.set_year}
                                                 AND week={self.week}
@@ -183,15 +183,13 @@ class FullLineupSim:
 
         df = pd.merge(df, ownership, how='left', on='player')
 
-        # df['min_score'] = df.pred_ownership.min()-0.01
-
-        df.pred_ownership = df.pred_ownership.fillna(df.pred_ownership.mean())
-        df.std_dev = df.std_dev.fillna(df.std_dev.mean())
-        df.min_score = df.min_score.fillna(df.min_score.min())
-
-        df.loc[df.max_score < 0.05, 'max_score'] = 0.05
-        df.loc[df.pred_ownership < df.min_score, 'pred_ownership'] = df.loc[df.pred_ownership < df.min_score, 'max_score'] / 3
-        df.loc[df.max_score.isnull(), 'max_score'] = abs(df.loc[df.max_score.isnull(), 'pred_ownership']) * 2
+        for c in ['pred_ownership', 'std_dev', 'min_score', 'max_score']:
+            if self.ownership_vers != 'standard_ln':
+                min_value = df.loc[df[c] > 0, c].min()
+                df.loc[df[c].isnull() | (df[c] <= 0), c] = min_value
+            
+            else:
+                df[c] = df[c].fillna(df[c].min())
 
         return df
 
@@ -228,7 +226,6 @@ class FullLineupSim:
     def trunc_normal_dist(self, col, num_options=500):
         if col=='pred_ownership': df = self.ownership_data
         elif col=='pred_fp_per_game': df = self.player_data
-        elif col=='vegas_points': df = self.vegas_points
 
         pred_list = []
         for mean_val, sdev, min_sc, max_sc in df[[col, 'std_dev', 'min_score', 'max_score']].values:
@@ -313,14 +310,35 @@ class FullLineupSim:
         return mean_own
     
 
+    def initialize_player_data(self):
+        
+        if self.use_covar: 
+            player_data = self.get_covar_means()
+            self.covar = self.pull_covar()
+        else:
+            player_data = self.get_model_predictions()
 
-    def run_sim(self, conn, to_add, to_drop, num_iters, ownership_vers, num_options, num_avg_pts, pos_or_neg,
-                qb_wr_stack, qb_te_stack, min_opp_team, max_teams_lineup,max_salary_remain,
+        self.player_data = self.join_salary(player_data)
+        self.player_data = self.join_opp(self.player_data)
+        self.opponents = self.get_matchups()
+
+
+    def run_sim(self, conn, to_add, to_drop, num_iters, opt_metric, std_dev_type, ownership_vers, 
+                num_options, num_avg_pts, pos_or_neg,
+                min_pass_catchers, rb_in_stack, min_opp_team, max_teams_lineup,max_salary_remain,
                 max_overlap, prev_qb_wt, prev_def_wt, previous_lineups, wr_flex_pct, rb_flex_pct,
                 use_ownership, overlap_constraint):
         
         self.conn = conn
-        self.prepare_data(ownership_vers, num_options, pos_or_neg)
+        self.opt_metric = opt_metric
+        self.std_dev_type = std_dev_type
+
+        if self.opt_metric != 'points':
+            self.use_covar = False
+
+        self.initialize_player_data()
+
+        self.prepare_data(use_ownership,ownership_vers, num_options, pos_or_neg)
         if wr_flex_pct == 'auto': self.flex_mode = 'auto'
         else: self.flex_mode = 'fixed'
 
@@ -339,13 +357,19 @@ class FullLineupSim:
                     self.set_position_counts(float(wr_flex_pct), rb_flex_pct)
                 
                 iters_run += 1
-                if iters_run == 4: 
+                if iters_run >= 2: 
+                    use_ownership = 0
+                if iters_run >= 3:
                     max_overlap = 8
-                    overlap_constraint = 'minus_one'
+                    overlap_constraint = 'standard'
+                    
 
                 cur_pred_fps = self.sample_points(num_options, num_avg_pts)
-                cur_ownership = self.sample_ownership(num_options, num_avg_pts)
-                c, A, b, G, h = self.setup_optimization_problem(to_add, to_drop, cur_pred_fps, cur_ownership, qb_wr_stack, qb_te_stack, 
+                if use_ownership == 1:
+                    cur_ownership = self.sample_ownership(num_options, num_avg_pts)
+                else:
+                    cur_ownership = np.zeros(len(cur_pred_fps))
+                c, A, b, G, h = self.setup_optimization_problem(to_add, to_drop, cur_pred_fps, cur_ownership, min_pass_catchers, rb_in_stack,
                                                                 min_opp_team, max_teams_lineup, max_salary_remain,
                                                                 max_overlap, prev_qb_wt, prev_def_wt, previous_lineups,
                                                                 use_ownership, overlap_constraint)
@@ -380,13 +404,14 @@ class FullLineupSim:
         current_ownership = self.ownerships.iloc[:, np.random.choice(range(4, num_options+4), size=num_avg_pts)].mean(axis=1)
         return current_ownership
         
-    def prepare_data(self, ownership_vers, num_options, pos_or_neg):
+    def prepare_data(self, use_ownership, ownership_vers, num_options, pos_or_neg):
         
         self.df = self.player_data.copy()
         self.pos_or_neg = pos_or_neg
         self.ownership_vers = ownership_vers
-        self.ownership_data = self.join_ownership_pred(self.df)
-        self.min_ownership = self.create_h_ownership()[0][0]
+        if use_ownership == 1:
+            self.ownership_data = self.join_ownership_pred(self.df)
+            self.min_ownership = self.create_h_ownership()[0][0]
 
         self.players = self.player_data['player'].values
         self.salaries = self.player_data['salary'].values
@@ -396,20 +421,20 @@ class FullLineupSim:
         self.unique_teams = list(set(self.teams))
         self.n_teams = len(self.unique_teams)
 
-        self.pred_fps = self.get_predictions('pred_fp_per_game', num_options=num_options+1)   
+        self.pred_fps = self.get_predictions('pred_fp_per_game', num_options=num_options+5)   
+        if use_ownership == 1:
+            self.ownerships = self.get_predictions('pred_ownership', ownership=True, num_options=num_options+5)
 
-        self.ownerships = self.get_predictions('pred_ownership', ownership=True, num_options=num_options+1)
 
-
-    def setup_optimization_problem(self, to_add, to_drop, cur_pred_fps, cur_ownership, qb_wr_stack, qb_te_stack, min_opp_team, 
-                                   max_teams_lineup, max_salary_remain, max_overlap, prev_qb_wt, prev_def_wt, previous_lineups,
-                                   use_ownership, overlap_constraint):
+    def setup_optimization_problem(self, to_add, to_drop, cur_pred_fps, cur_ownership, min_pass_catchers, rb_in_stack,
+                                   min_opp_team, max_teams_lineup, max_salary_remain, max_overlap, prev_qb_wt, 
+                                   prev_def_wt, previous_lineups, use_ownership, overlap_constraint):
         
         n_variables = self.n_players + len(self.unique_teams)
         
         c = self.create_objective_function(cur_pred_fps)
         A, b = self.create_equality_constraints()
-        G, h = self.create_inequality_constraints(to_add, to_drop, cur_ownership, n_variables, qb_wr_stack, qb_te_stack, 
+        G, h = self.create_inequality_constraints(to_add, to_drop, cur_ownership, n_variables, min_pass_catchers, rb_in_stack,
                                                   min_opp_team, max_teams_lineup, max_salary_remain,
                                                   max_overlap, prev_qb_wt, prev_def_wt, previous_lineups,
                                                   use_ownership, overlap_constraint)
@@ -420,9 +445,11 @@ class FullLineupSim:
     
 
     def set_position_counts(self, wr_flex_pct, rb_flex_pct):
-        # Base position requirements (without FLEX)
+        
+        rb_flex_pct = np.min([rb_flex_pct, 1-wr_flex_pct])
+        te_flex_pct = np.max([1 - rb_flex_pct - wr_flex_pct, 0])
         flex_pos = np.random.choice(['RB', 'WR', 'TE'], 
-                                p=[rb_flex_pct, wr_flex_pct, 1 - rb_flex_pct - wr_flex_pct])
+                                p=[rb_flex_pct, wr_flex_pct, te_flex_pct])
         self.position_counts[flex_pos] += 1
         self.num_pos = 9.0
 
@@ -471,7 +498,7 @@ class FullLineupSim:
         return G, h
 
 
-    def create_inequality_constraints(self, to_add, to_drop, cur_ownership, n_variables, qb_wr_stack, qb_te_stack, 
+    def create_inequality_constraints(self, to_add, to_drop, cur_ownership, n_variables, min_pass_catchers, rb_in_stack,
                                       min_opp_team, max_teams_lineup, max_salary_remain, max_overlap, prev_qb_wt,
                                       prev_def_wt, previous_lineups, use_ownership, overlap_constraint):
         G = []
@@ -487,60 +514,12 @@ class FullLineupSim:
             if use_ownership==1: 
                 print('Using ownership')
                 self.add_ownership_constraint(G, h, cur_ownership)
-            self.add_stacking_constraints(G, h, n_variables, qb_wr_stack, qb_te_stack)
+            self.add_stacking_constraints(G, h, n_variables, min_pass_catchers, rb_in_stack)
             self.add_opposing_team_constraint(G, h, n_variables, min_opp_team)
             self.add_max_teams_constraint(G, h, n_variables, max_teams_lineup)
             self.add_overlap_constraint(G, h, n_variables, max_overlap, previous_lineups, prev_qb_wt, prev_def_wt, overlap_constraint)
             
         return matrix(np.array(G), tc='d'), matrix(h, tc='d')
-    
-
-
-    # def set_position_counts(self, wr_flex_pct, rb_flex_pct):
-    #     flex_pos = np.random.choice(['RB', 'WR', 'TE'], p=[rb_flex_pct, wr_flex_pct, 1 - rb_flex_pct - wr_flex_pct])
-    #     # flex_pos = np.random.choice(['RB', 'WR', 'TE'], p=[0.37, 0.51, 0.12])
-    #     self.position_counts = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'DEF': 1}
-    #     self.position_counts[flex_pos] += 1
-    #     self.num_pos = float(np.sum(list(self.position_counts.values())))
-
-
-    # def create_equality_constraints(self):
-    #     A = []
-    #     b = []
-
-    #     # Constraint: Exact number of players
-    #     A.append([1.0] * self.n_players + [0.0] * len(self.unique_teams))
-    #     b.append(self.num_pos)
-
-    #     # Constraints for exact number of players per position
-    #     for pos, count in self.position_counts.items():
-    #         constraint = [1.0 if p == pos else 0.0 for p in self.positions] + [0.0] * len(self.unique_teams)
-    #         A.append(constraint)
-    #         b.append(float(count))
-
-    #     return matrix(A, tc='d'), matrix(b, tc='d')
-
-    # def create_inequality_constraints(self, to_add, to_drop, cur_ownership, n_variables, qb_wr_stack, qb_te_stack, 
-    #                                   min_opp_team, max_teams_lineup, max_salary_remain, max_overlap, prev_qb_wt,
-    #                                   prev_def_wt, previous_lineups, use_ownership, overlap_constraint):
-    #     G = []
-    #     h = []
-
-    #     self.add_salary_constraint(G, h, max_salary_remain)
-    #     self.add_forced_players_constraint(G, h, n_variables, to_add)
-    #     self.add_excluded_players_constraint(G, h, n_variables, to_drop)
-    #     self.add_qb_dst_constraint(G, h, n_variables)
-
-    #     if len(to_add) <= 7:
-    #         if use_ownership==1: 
-    #             print('Using ownership')
-    #             self.add_ownership_constraint(G, h, cur_ownership)
-    #         self.add_stacking_constraints(G, h, n_variables, qb_wr_stack, qb_te_stack)
-    #         self.add_opposing_team_constraint(G, h, n_variables, min_opp_team)
-    #         self.add_max_teams_constraint(G, h, n_variables, max_teams_lineup)
-    #         self.add_overlap_constraint(G, h, n_variables, max_overlap, previous_lineups, prev_qb_wt, prev_def_wt, overlap_constraint)
-            
-    #     return matrix(np.array(G), tc='d'), matrix(h, tc='d')
     
 
     def add_salary_constraint(self, G, h, max_salary_remain):
@@ -570,36 +549,36 @@ class FullLineupSim:
                 G.append(constraint)
                 h.append(0.0)  # Must be less than or equal to 0, forcing non-selection
 
-    def add_stacking_constraints(self, G, h, n_variables, qb_wr_stack, qb_te_stack):
+    def add_stacking_constraints(self, G, h, n_variables, min_pass_catchers, rb_in_stack):
         for team in self.unique_teams:
-            self.add_qb_wr_stack(G, h, n_variables, team, qb_wr_stack)
-            self.add_qb_te_stack(G, h, n_variables, team, qb_te_stack)
+            self.add_pass_catcher_stack(G, h, n_variables, team, min_pass_catchers, rb_in_stack)
 
-    def add_qb_wr_stack(self, G, h, n_variables, team, qb_wr_stack):
+    def add_pass_catcher_stack(self, G, h, n_variables, team, min_pass_catchers, rb_in_stack):
         qb_indices = [i for i, (pos, t) in enumerate(zip(self.positions, self.teams)) if pos == 'QB' and t == team]
         wr_indices = [i for i, (pos, t) in enumerate(zip(self.positions, self.teams)) if pos == 'WR' and t == team]
-        
-        if qb_indices and wr_indices:
-            constraint = [0] * n_variables
-            for qb_index in qb_indices:
-                constraint[qb_index] = qb_wr_stack
-            for wr_index in wr_indices:
-                constraint[wr_index] = -1
-            G.append(constraint)
-            h.append(0.0)
-
-    def add_qb_te_stack(self, G, h, n_variables, team, qb_te_stack):
-        qb_indices = [i for i, (pos, t) in enumerate(zip(self.positions, self.teams)) if pos == 'QB' and t == team]
         te_indices = [i for i, (pos, t) in enumerate(zip(self.positions, self.teams)) if pos == 'TE' and t == team]
         
-        if qb_indices and te_indices:
-            constraint = [0] * n_variables
+        # Get RB indices if rb_in_stack is enabled
+        if rb_in_stack == 1:
+            rb_indices = [i for i, (pos, t) in enumerate(zip(self.positions, self.teams)) if pos == 'RB' and t == team]
+        else:
+            rb_indices = []
+        
+        # Combined pass-catcher stacking constraint: if QB selected, need minimum pass catchers (WR + TE + RB if enabled)
+        all_pass_catcher_indices = wr_indices + te_indices + rb_indices
+        if qb_indices and all_pass_catcher_indices and min_pass_catchers > 0:
             for qb_index in qb_indices:
-                constraint[qb_index] = qb_te_stack
-            for te_index in te_indices:
-                constraint[te_index] = -1
-            G.append(constraint)
-            h.append(0.0)
+                constraint = [0] * n_variables
+                constraint[qb_index] = min_pass_catchers          # If QB selected, need N pass catchers
+                for wr_index in wr_indices:
+                    constraint[wr_index] = -1                     # Each WR counts as -1
+                for te_index in te_indices:
+                    constraint[te_index] = -1                     # Each TE counts as -1
+                if rb_in_stack == 1:
+                    for rb_index in rb_indices:
+                        constraint[rb_index] = -1                 # Each RB counts as -1 when enabled
+                G.append(constraint)
+                h.append(0.0)                                     # Right hand side
 
     def add_qb_dst_constraint(self, G, h, n_variables):
         for team in self.unique_teams:
@@ -721,16 +700,19 @@ class FullLineupSim:
             qb = next((player for player, t, pos in zip(selected_players, selected_teams, selected_positions) if t == team and pos == 'QB'), None)
             wrs = [player for player, t, pos in zip(selected_players, selected_teams, selected_positions) if t == team and pos == 'WR']
             tes = [player for player, t, pos in zip(selected_players, selected_teams, selected_positions) if t == team and pos == 'TE']
+            rbs = [player for player, t, pos in zip(selected_players, selected_teams, selected_positions) if t == team and pos == 'RB']
+            pass_catchers = wrs + tes + rbs
 
-            if qb and wrs:
-                print(f"\nQB-WR Stack for {team}:")
+            if qb and pass_catchers:
+                print(f"\nQB-Pass Catcher Stack for {team}:")
                 print(f"QB: {qb}")
-                print(f"WRs: {', '.join(wrs)}")
-
-            if qb and tes:
-                print(f"\nQB-TE Stack for {team}:")
-                print(f"QB: {qb}")
-                print(f"TEs: {', '.join(tes)}")
+                if wrs:
+                    print(f"WRs: {', '.join(wrs)}")
+                if tes:
+                    print(f"TEs: {', '.join(tes)}")
+                if rbs:
+                    print(f"RBs: {', '.join(rbs)}")
+                print(f"Total Pass Catchers: {len(pass_catchers)}")
 
     def print_constraint_verification(self, selected_players, selected_salaries, selected_positions, selected_teams):
         print("\nConstraint Verification:")
@@ -741,7 +723,7 @@ class FullLineupSim:
             
         # Display stack information
         selected_teams_set = set(selected_teams)
-        print(f"\nNumber of teams in lineup: {len(selected_teams_set)} (should be exactly {max_teams_lineup})")
+        print(f"\nNumber of teams in lineup: {len(selected_teams_set)}")
         print(f"Teams in lineup: {', '.join(selected_teams_set)}")
         for team in selected_teams_set:
             team_players = [player for player, t in zip(selected_players, selected_teams) if t == team]
@@ -754,9 +736,9 @@ from joblib import Parallel, delayed
 
 class RunSim:
 
-    def __init__(self, db_path, week, year, pred_vers, reg_ens_vers, million_ens_vers, std_dev_type, total_lineups):
+    def __init__(self, db_path, week, year, pred_vers, reg_ens_vers, million_ens_vers, total_lineups):
         
-        if '.sqlite3' not in db_path: self.db_path = f'{db_path}/Simulation.sqlite3'
+        if '.sqlite3' not in db_path: self.db_path = f'{db_path}/Simulation/Simulation_{year}.sqlite3'
         else: self.db_path = db_path
 
         self.week = week
@@ -764,11 +746,10 @@ class RunSim:
         self.pred_vers = pred_vers
         self.reg_ens_vers = reg_ens_vers
         self.million_ens_vers = million_ens_vers
-        self.std_dev_type = std_dev_type
         self.total_lineups = total_lineups
-        self.col_ordering = ['full_model_rel_weight', 'covar_type', 'num_iters', 'ownership_vers_variable', 
+        self.col_ordering = ['opt_metric', 'std_dev_type', 'covar_type', 'num_iters',
                              'ownership_vers',  'num_options', 'num_avg_pts',
-                             'pos_or_neg', 'qb_wr_stack', 'qb_te_stack', 'min_opp_team', 'max_teams_lineup',
+                             'pos_or_neg', 'min_pass_catchers', 'rb_in_stack', 'min_opp_team', 'max_teams_lineup',
                              'max_salary_remain', 'max_overlap', 'prev_qb_wt', 'prev_def_wt', 'wr_flex_pct', 
                              'rb_flex_pct', 'use_ownership', 'overlap_constraint']
         
@@ -842,15 +823,11 @@ class RunSim:
         for i in range(self.total_lineups):
             cur_params = []
             for k, param_options in d.items():
-                if k == 'ownership_vers' and ownership_var==1:
-                    cur_params.append(param_options)
-                else:
-                    param_vars = list(param_options.keys())
-                    param_prob = list(param_options.values())
-                    cur_choice = np.random.choice(param_vars, p=param_prob)
-                    cur_params.append(cur_choice)
-                    if k=='ownership_vers_variable':
-                        ownership_var = cur_choice
+                param_vars = list(param_options.keys())
+                param_prob = list(param_options.values())
+                cur_choice = np.random.choice(param_vars, p=param_prob)
+                cur_params.append(cur_choice)
+
 
             cur_params.append(i)
             params.append(cur_params)
@@ -867,19 +844,12 @@ class RunSim:
 
         conn = self.create_conn()
         sim = FullLineupSim(self.week, self.year, conn, self.pred_vers, self.reg_ens_vers, 
-                            self.million_ens_vers, self.std_dev_type, p['full_model_rel_weight'], p['use_covar'],
-                            p['covar_type'], print_results=False)
+                            self.million_ens_vers, p['use_covar'], p['covar_type'], print_results=False)
         conn.close()
         return sim, p
     
     
     def run_single_iter(self, sim, p, to_add, to_drop_selected, previous_lineups):
-
-        if p['ownership_vers_variable']==1:
-            own_opt, own_prob = list(p['ownership_vers'].keys()), list(p['ownership_vers'].values())
-            own_vers = np.random.choice(own_opt, p=own_prob)
-        else:
-            own_vers = p['ownership_vers']
 
         to_drop = []
         to_drop.extend(to_drop_selected)
@@ -888,15 +858,16 @@ class RunSim:
         last_lineup = None
         i = 0
         while last_lineup is None and i < 10:
-            last_lineup, player_cnts = sim.run_sim(conn, to_add, to_drop, p['num_iters'], own_vers, p['num_options'], p['num_avg_pts'],
-                                                p['pos_or_neg'], p['qb_wr_stack'], p['qb_te_stack'], p['min_opp_team'], p['max_teams_lineup'],
-                                                p['max_salary_remain'], p['max_overlap'], p['prev_qb_wt'], p['prev_def_wt'], previous_lineups,
-                                                p['wr_flex_pct'], p['rb_flex_pct'], p['use_ownership'], p['overlap_constraint'])
+            last_lineup, player_cnts = sim.run_sim(conn, to_add, to_drop, p['num_iters'], p['opt_metric'], p['std_dev_type'], p['ownership_vers'], 
+                                                   p['num_options'], p['num_avg_pts'], p['pos_or_neg'], p['min_pass_catchers'], p['rb_in_stack'], p['min_opp_team'], p['max_teams_lineup'],
+                                                   p['max_salary_remain'], p['max_overlap'], p['prev_qb_wt'], p['prev_def_wt'], previous_lineups,
+                                                   p['wr_flex_pct'], p['rb_flex_pct'], p['use_ownership'], p['overlap_constraint'])
             i += 1
         conn.close() 
 
         if player_cnts is not None:
             player_cnts = player_cnts[~player_cnts.player.isin(to_add)].reset_index(drop=True)
+            self.player_data = sim.player_data.copy()
         
         return last_lineup, player_cnts
                     
@@ -963,54 +934,58 @@ class RunSim:
 
         return all_lineups
 
-# #%%
-# week = 11
-# year = 2024
-# total_lineups = 10
+#%%
+
+# import warnings
+# warnings.filterwarnings('ignore')
+
+# week = 1
+# year = 2025
+# total_lineups = 20
 
 # model_vers = {
-#             'million_ens_vers': 'random_full_stack_newp_matt0_brier1_include2_kfold3',
-#             'pred_vers': 'sera0_rsq0_mse1_brier1_matt0_optuna_tpe_numtrials100_higherkb',
-#             'reg_ens_vers': 'random_full_stack_newp_sera0_rsq0_mse1_include2_kfold3',
-#             'std_dev_type': 'spline_class80_q80_matt0_brier1_kfold3'
+#             'million_ens_vers': 'random_full_stack_matt0_brier1_include2_kfold3',
+#             'pred_vers': 'sera0_rsq0_mse1_brier1_matt0_optuna_tpe_numtrials100_quick',
+#             'reg_ens_vers': 'random_full_stack_sera0_rsq0_mse1_include2_kfold3',
 #             }
 
 
 # d = {
-#      'covar_type': {'kmeans_pred_trunc': 0.0,
-#                     'kmeans_pred_trunc_new': 0.0,
-#                     'no_covar': 0.3,
-#                     'team_points_trunc': 0.7,
-#                     'team_points_trunc_avgproj': 0.0},
-#     'full_model_rel_weight': {0.2: 0.6, 5: 0.4},
+#     'std_dev_type':{'spline_class80_q80_matt0_brier1_kfold3': 1},
+#     'opt_metric': {'points': 0.2, 'roi': 0.4, 'million': 0.2, 'roitop': 0.2},
+#     'covar_type': {'no_covar': 1,
+#                     'team_points_trunc': 0.},
 #     'pos_or_neg': {1: 1},
-#     'qb_wr_stack': {0: 0.1, 1: 0.5, 2: 0.4},
-#     'qb_te_stack': {0: 0.7, 1: 0.3},
-#     'num_options': {50: 1},
-#     'num_avg_pts': {50: 1},
+#     'min_pass_catchers': {1: 0., 2: 0.7, 3: 0.3},
+#     'rb_in_stack': {0: 1, 1: 0.},
+#     'num_options': {5000: 1},
+#     'num_avg_pts': {100: 1},
 #     'num_iters': {1: 1},
-#     'ownership_vers_variable': {0: 1.0, 1: 0},
 #     'ownership_vers': {'mil_div_standard_ln': 0,
-#                         'mil_only': 0.3,
-#                         'mil_times_standard_ln': 0.3,
-#                         'standard_ln': 0.4},
-#     'max_teams_lineup': {8: 0.4, 6: 0.4, 4: 0.2},
-#     'max_salary_remain': {500: 1},
-#     'max_overlap': {6: 1}, 
-#     'min_opp_team': {0: 0.3, 1: 0.5, 2: 0.2},
+#                         'mil_only': 0.2,
+#                         'mil_times_standard_ln': 0.,
+#                         'roi_only': 0.2,
+#                         'roi_times_standard_ln': 0.2,
+#                         'roitop_times_standard_ln': 0.,
+#                         'roitop_only': 0.2,
+#                         'standard_ln': 0.2},
+#     'max_teams_lineup': {9: 1, 6: 0., 4: 0.},
+#     'max_salary_remain': {750: 1},
+#     'max_overlap': {7: 1, 6: 0.}, 
+#     'min_opp_team': {0: 1, 1: 0., 2: 0.},
 #     'prev_qb_wt': {1: 1},
-#     'prev_def_wt': {9: 1},
+#     'prev_def_wt': {1: 1},
 #     'wr_flex_pct': {
 #                     0: 0,
-#                     0.6: 0.5,
-#                     'auto': 0.5
+#                     0.6: 1,
+#                     'auto': 0
 #                     },
 #     'rb_flex_pct': {
-#                     0.4: 0,
-#                     0: 1
+#                     0.4: 0.7,
+#                     0: 0.3
 #                     },
-#     'use_ownership': {0: 0.5, 1: 0.5},
-#     'overlap_constraint': {'div_two': 1, 'minus_one': 0., 'plus_wts': 0, 'standard': 0},
+#     'use_ownership': {0: 0.3, 1: 0.7},
+#     'overlap_constraint': {'div_two': 0, 'minus_one': 0., 'plus_wts': 0, 'standard': 1},
 #     }
 
 # print(f'Running week {week} for year {year}')
@@ -1018,30 +993,30 @@ class RunSim:
 # pred_vers = model_vers['pred_vers']
 # reg_ens_vers = model_vers['reg_ens_vers']
 # million_ens_vers = model_vers['million_ens_vers']
-# std_dev_type = model_vers['std_dev_type']
 
-# path = 'C:/Users/borys/OneDrive/Documents/Github/Daily_Fantasy/Data/Databases/'
-# rs = RunSim(path, week, year, pred_vers, reg_ens_vers, million_ens_vers, std_dev_type, total_lineups)
+# path = 'C:/Users/borys/OneDrive/Documents/Github/Daily_Fantasy_App/app/Simulation_App.sqlite3'
+# rs = RunSim(path, week, year, pred_vers, reg_ens_vers, million_ens_vers, total_lineups)
 # params = rs.generate_param_list(d)
 
 
 # #%%
 
-# sim, p = rs.setup_sim(params[0])
+# sim, p = rs.setup_sim(params[5])
 
 # to_add = []
 # to_drop = []
 # previous_lineups = []
-# l1, l2 = rs.run_single_iter(sim, p, to_add, to_drop,previous_lineups)
+# l1, l2 = rs.run_single_iter(sim, p, to_add, to_drop, previous_lineups)
 # l2 = pd.merge(l2, sim.player_data[['player', 'pos']], on='player')
 # print(l2.groupby('pos').size())
 # l2
 
 # #%%
 
-# rs.run_multiple_lineups(params, calc_winnings=True)
-# #%%
-# to_add = rs.run_full_lineup(params[1], to_add=[], to_drop=[], previous_lineups=previous_lineups)
-# to_add
+# total_winnings, player_results, winnings_list = rs.run_multiple_lineups(params, calc_winnings=True)
+# print(total_winnings)
+# print(winnings_list)
+# player_results.groupby('lineup_num').agg({'fantasy_pts': 'sum'}).sort_values(by='fantasy_pts', ascending=False)
+
 
 # # %%
