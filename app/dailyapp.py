@@ -11,7 +11,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, select, DateTime
 
 year = 2025
-week = 1
+week = 2
 total_lineups = 10
 db_name = 'Simulation_App.sqlite3'
 
