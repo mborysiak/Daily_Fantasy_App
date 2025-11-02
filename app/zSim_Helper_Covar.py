@@ -29,6 +29,11 @@ class FullLineupSim:
             metric_name = 'pred_fp_per_game'
             metric_ens_vers = self.reg_ens_vers
             std_dev_query = f"AND std_dev_type='{self.std_dev_type}'"
+        if self.opt_metric == 'etr_points':
+            table_name = 'ETR_Predictions'
+            metric_name = 'pred_fp_per_game'
+            metric_ens_vers = self.reg_ens_vers
+            std_dev_query = f"AND std_dev_type='{self.std_dev_type}'"
         elif self.opt_metric == 'roi':
             table_name = 'ROI_Predictions'
             metric_name = 'pred_roi'
@@ -336,6 +341,60 @@ class FullLineupSim:
         return mean_own
     
 
+    def get_team_game_mapping(self):
+        """Create a mapping of teams to their games for hierarchical Gumbel noise"""
+        team_to_game = {}
+        processed_games = set()
+        
+        for team in self.unique_teams:
+            if team in self.opponents:
+                opp_team = self.opponents[team]
+                # Create a consistent game identifier (sorted teams)
+                game_id = tuple(sorted([team, opp_team]))
+                
+                if game_id not in processed_games:
+                    processed_games.add(game_id)
+                
+                team_to_game[team] = game_id
+        
+        return team_to_game
+    
+    def calculate_position_scales(self, cur_pred_fps):
+        """
+        Calculate adaptive scaling factors for each position based on top-tier player ranges.
+        This makes temperature scale-invariant across different optimization metrics (points, ROI, etc.)
+        """
+        # Position depth varies - these define how many top players to consider for each position
+        top_n_by_position = {
+            'QB': 4,   # Fewer QBs rostered
+            'RB': 8,   # Deep position
+            'WR': 12,   # Deepest position
+            'TE': 4,   # Shallow position
+            'DEF': 4   # Very shallow
+        }
+        
+        position_scales = {}
+        for pos in ['QB', 'RB', 'WR', 'TE', 'DEF']:
+            pos_mask = np.array([p == pos for p in self.positions])
+            if pos_mask.sum() > 0:
+                pos_values = cur_pred_fps[pos_mask]
+                sorted_vals = np.sort(pos_values)[::-1]  # Sort descending (best first)
+                
+                # Take top N players for this position
+                n = min(top_n_by_position[pos], len(sorted_vals))
+                top_tier = sorted_vals[:n]
+                
+                # Use range of competitive tier as scale
+                scale = top_tier.max() - top_tier.min()
+                
+                # Fallback if scale is too small (avoid division issues)
+                if scale < 0.01:
+                    scale = np.std(pos_values) if len(pos_values) > 1 else 1.0
+                
+                position_scales[pos] = scale
+        
+        return position_scales
+
     def initialize_player_data(self):
         
         if self.use_covar: 
@@ -353,7 +412,7 @@ class FullLineupSim:
                 num_options, num_avg_pts, pos_or_neg,
                 min_pass_catchers, rb_in_stack, min_opp_team, max_teams_lineup,max_salary_remain,
                 max_overlap, prev_qb_wt, prev_def_wt, prev_te_wt, previous_lineups, wr_flex_pct, rb_flex_pct,
-                use_ownership, overlap_constraint, min_own_three_ten, min_own_less_three):
+                use_ownership, overlap_constraint, min_own_three_ten, min_own_less_three, player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
         
         self.conn = conn
         self.opt_metric = opt_metric
@@ -407,7 +466,7 @@ class FullLineupSim:
                 c, A, b, G, h = self.setup_optimization_problem(to_add, to_drop, cur_pred_fps, cur_ownership, min_pass_catchers, rb_in_stack,
                                                                 min_opp_team, max_teams_lineup, max_salary_remain,
                                                                 max_overlap, prev_qb_wt, prev_def_wt, prev_te_wt, previous_lineups,
-                                                                use_ownership, overlap_constraint, std_ownership_pcts, min_own_three_ten, min_own_less_three)
+                                                                use_ownership, overlap_constraint, std_ownership_pcts, min_own_three_ten, min_own_less_three, player_gumbel_temp, team_gumbel_temp, game_gumbel_temp)
                 
                 status, x = self.solve_optimization(c, G, h, A, b)
                 
@@ -468,8 +527,11 @@ class FullLineupSim:
         self.n_players = len(self.players)
         self.unique_teams = list(set(self.teams))
         self.n_teams = len(self.unique_teams)
+        
+        # Create team-to-game mapping after unique_teams is set
+        self.team_to_game = self.get_team_game_mapping()
 
-        self.pred_fps = self.get_predictions('pred_fp_per_game', num_options=num_options+5)   
+        self.pred_fps = self.get_predictions('pred_fp_per_game', num_options=num_options+5)
         if use_ownership == 1:
             self.ownerships = self.get_predictions('pred_ownership', ownership=True, num_options=num_options+5)
         if min_own_three_ten > 0 or min_own_less_three > 0:
@@ -478,11 +540,11 @@ class FullLineupSim:
 
     def setup_optimization_problem(self, to_add, to_drop, cur_pred_fps, cur_ownership, min_pass_catchers, rb_in_stack,
                                    min_opp_team, max_teams_lineup, max_salary_remain, max_overlap, prev_qb_wt, 
-                                   prev_def_wt, prev_te_wt, previous_lineups, use_ownership, overlap_constraint, std_ownership_pcts=None, min_own_three_ten=0, min_own_less_three=0):
+                                   prev_def_wt, prev_te_wt, previous_lineups, use_ownership, overlap_constraint, std_ownership_pcts=None, min_own_three_ten=0, min_own_less_three=0, player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
         
         n_variables = self.n_players + len(self.unique_teams)
         
-        c = self.create_objective_function(cur_pred_fps)
+        c = self.create_objective_function(cur_pred_fps, player_gumbel_temp, team_gumbel_temp, game_gumbel_temp)
         A, b = self.create_equality_constraints()
         G, h = self.create_inequality_constraints(to_add, to_drop, cur_ownership, n_variables, min_pass_catchers, rb_in_stack,
                                                   min_opp_team, max_teams_lineup, max_salary_remain,
@@ -490,7 +552,55 @@ class FullLineupSim:
                                                   use_ownership, overlap_constraint, std_ownership_pcts, min_own_three_ten, min_own_less_three)
         return c, A, b, G, h
 
-    def create_objective_function(self, cur_pred_fps):
+    def create_objective_function(self, cur_pred_fps, player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
+        """
+        Apply hierarchical Gumbel noise at three levels with adaptive scaling:
+        1. Game-level: Shootout vs defensive battle (both teams benefit/suffer together)
+        2. Team-level: Winner vs loser (asymmetric within game)
+        3. Player-level: Individual variance
+        
+        Temperatures are automatically scaled based on the competitive tier spread,
+        making them work consistently across different optimization metrics (points, ROI, etc.)
+        """
+        if player_gumbel_temp > 0 or team_gumbel_temp > 0 or game_gumbel_temp > 0:
+            
+            # Calculate adaptive scaling factors based on top-tier player ranges
+            position_scales = self.calculate_position_scales(cur_pred_fps)
+            
+            # Calculate overall scale for game/team level (use median of position scales)
+            overall_scale = np.median(list(position_scales.values()))
+            
+            # 1. Game-level noise (shootout vs defensive battle)
+            if game_gumbel_temp > 0:
+                scaled_game_temp = game_gumbel_temp * overall_scale
+                game_noise_dict = {}
+                for game_id in set(self.team_to_game.values()):
+                    game_noise_dict[game_id] = np.random.gumbel(0, scaled_game_temp)
+                
+                # Apply game noise - INVERTED for defenses (shootout hurts DEF, defensive battle helps DEF)
+                game_noise_array = np.array([
+                    -game_noise_dict[self.team_to_game[t]] if pos == 'DEF' 
+                    else game_noise_dict[self.team_to_game[t]]
+                    for t, pos in zip(self.teams, self.positions)
+                ])
+                cur_pred_fps = cur_pred_fps + game_noise_array
+            
+            # 2. Team-level noise (who wins/loses within the game)
+            if team_gumbel_temp > 0:
+                scaled_team_temp = team_gumbel_temp * overall_scale
+                team_noise_dict = {team: np.random.gumbel(0, scaled_team_temp) 
+                                  for team in self.unique_teams}
+                team_noise_array = np.array([team_noise_dict[t] for t in self.teams])
+                cur_pred_fps = cur_pred_fps + team_noise_array
+            
+            # 3. Player-level noise (individual variance, position-specific scaling)
+            if player_gumbel_temp > 0:
+                player_noise = np.array([
+                    np.random.gumbel(0, player_gumbel_temp * position_scales[pos])
+                    for pos in self.positions
+                ])
+                cur_pred_fps = cur_pred_fps + player_noise
+        
         return matrix(list(-cur_pred_fps) + [0] * len(self.unique_teams), tc='d')
     
 
@@ -788,7 +898,7 @@ class RunSim:
                              'ownership_vers',  'num_options', 'num_avg_pts',
                              'pos_or_neg', 'min_pass_catchers', 'rb_in_stack', 'min_opp_team', 'max_teams_lineup',
                              'max_salary_remain', 'max_overlap', 'prev_qb_wt', 'prev_def_wt', 'prev_te_wt', 'wr_flex_pct', 
-                             'rb_flex_pct', 'use_ownership', 'overlap_constraint', 'min_own_three_ten', 'min_own_less_three']
+                             'rb_flex_pct', 'use_ownership', 'overlap_constraint', 'min_own_three_ten', 'min_own_less_three', 'player_gumbel_temp', 'team_gumbel_temp', 'game_gumbel_temp']
         
         try:
             stats_conn = sqlite3.connect(f'{db_path}/FastR.sqlite3', timeout=60)
@@ -822,7 +932,7 @@ class RunSim:
 
     def calc_winnings(self, to_add):
         results = pd.DataFrame(to_add, columns=['player'])
-        results = pd.merge(results, self.player_stats, on='player')
+        results = pd.merge(results, self.player_stats, on='player', how='left').fillna(0)
         total_pts = results.fantasy_pts.sum()
         idx_match = np.argmin(abs(self.prizes.Points - total_pts))
         prize_money = self.prizes.loc[idx_match, 'prize']
@@ -898,7 +1008,7 @@ class RunSim:
             last_lineup, player_cnts = sim.run_sim(conn, to_add, to_drop, p['num_iters'], p['opt_metric'], p['std_dev_type'], p['ownership_vers'], 
                                                    p['num_options'], p['num_avg_pts'], p['pos_or_neg'], p['min_pass_catchers'], p['rb_in_stack'], p['min_opp_team'], p['max_teams_lineup'],
                                                    p['max_salary_remain'], p['max_overlap'], p['prev_qb_wt'], p['prev_def_wt'], p['prev_te_wt'], previous_lineups,
-                                                   p['wr_flex_pct'], p['rb_flex_pct'], p['use_ownership'], p['overlap_constraint'], p['min_own_three_ten'], p['min_own_less_three'])
+                                                   p['wr_flex_pct'], p['rb_flex_pct'], p['use_ownership'], p['overlap_constraint'], p['min_own_three_ten'], p['min_own_less_three'], p['player_gumbel_temp'], p['team_gumbel_temp'], p['game_gumbel_temp'])
             i += 1
         conn.close() 
 
@@ -976,9 +1086,9 @@ class RunSim:
 # import warnings
 # warnings.filterwarnings('ignore')
 
-# week = 1
+# week = 8
 # year = 2025
-# total_lineups = 20
+# total_lineups = 25
 
 # model_vers = {
 #             'million_ens_vers': 'random_full_stack_matt0_brier1_include2_kfold3',
@@ -988,12 +1098,12 @@ class RunSim:
 
 
 # d = {
-#     'std_dev_type':{'spline_class80_q80_matt0_brier1_kfold3': 1},
-#     'opt_metric': {'points': 0., 'roi': 1, 'million': 0., 'roitop': 0.},
+#     'std_dev_type':{'spline_pred_class80_q80_matt0_brier1_kfold3': 1},
+#     'opt_metric': {'points': 0.4, 'roi': 0.6, 'million': 0., 'roitop': 0., 'etr_points': 0.},
 #     'covar_type': {'no_covar': 1,
 #                     'team_points_trunc': 0.},
 #     'pos_or_neg': {1: 1},
-#     'min_pass_catchers': {1: 0., 2: 0.7, 3: 0.3},
+#     'min_pass_catchers': {1: 0.2, 2: 0.7, 3: 0.1},
 #     'min_own_three_ten': {0: 1, 1: 0., 2: 0., 3: 0., 4: 0., 5:0.},
 #     'min_own_less_three': {0: 1, 1: 0., 2: 0., 3: 0},
 #     'rb_in_stack': {0: 1, 1: 0.},
@@ -1001,20 +1111,20 @@ class RunSim:
 #     'num_avg_pts': {100: 1},
 #     'num_iters': {1: 1},
 #     'ownership_vers': {'mil_div_standard_ln': 0,
-#                         'mil_only': 0.4,
+#                         'mil_only': 0.3,
 #                         'mil_times_standard_ln': 0.,
-#                         'roi_only': 0,
-#                         'roi_times_standard_ln': 0.3,
+#                         'roi_only': 0.3,
+#                         'roi_times_standard_ln': 0.,
 #                         'roitop_times_standard_ln': 0.,
 #                         'roitop_only': 0.,
-#                         'standard_ln': 0.3},
-#     'max_teams_lineup': {9: 1, 6: 0., 4: 0.},
-#     'max_salary_remain': {750: 1},
-#     'max_overlap': {7: 1, 6: 0.}, 
+#                         'standard_ln': 0.4},
+#     'max_teams_lineup': {9: 0, 6: 0., 5: 1},
+#     'max_salary_remain': {750: 0, 1000:0.5, 500: 0.5},
+#     'max_overlap': {5: 0, 6: 0., 7:1}, 
 #     'min_opp_team': {0: 1, 1: 0., 2: 0.},
 #     'prev_qb_wt': {1: 1},
 #     'prev_def_wt': {1: 1},
-#     'prev_te_wt': {1: 0, 4: 1},
+#     'prev_te_wt': {1: 1, 4: 0},
 #     'wr_flex_pct': {
 #                     0: 0,
 #                     0.6: 1,
@@ -1022,10 +1132,13 @@ class RunSim:
 #                     },
 #     'rb_flex_pct': {
 #                     0.4: 0.7,
-#                     0: 0.3
+#                     0.35: 0.3
 #                     },
 #     'use_ownership': {0: 0.5, 1: 0.5},
 #     'overlap_constraint': {'div_two': 0, 'minus_one': 0., 'plus_wts': 0, 'standard': 1},
+#     'player_gumbel_temp': {0: 0, 0.05: 0.6, 0.15: 0.2, 0.2: 0.2, 0.3: 0, 1.0: 0.},
+#     'team_gumbel_temp': {0: 1, 0.01:0},
+#     'game_gumbel_temp': {0: 0.5, 0.01: 0, 0.05: 0,  0.1: 0, 0.2: 0.5, 0.4: 0., },
 #     }
 
 # print(f'Running week {week} for year {year}')
@@ -1058,4 +1171,7 @@ class RunSim:
 # player_results.groupby('lineup_num').agg({'fantasy_pts': 'sum'}).sort_values(by='fantasy_pts', ascending=False)
 
 
-# %%
+# # %%
+# player_results.groupby('player').agg({'fantasy_pts': 'mean', 'lineup_num': 'count'}).sort_values(by='lineup_num', ascending=False).iloc[:50]
+
+# # %%
