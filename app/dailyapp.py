@@ -294,6 +294,9 @@ def run_sim(df, rs, sim, params):
     
     if st.session_state["full_lineup"]: params['num_iters'] = 1
     else: params['num_iters'] = 25
+    
+    # Debug: Log what we're passing to run_single_iter
+    st.sidebar.write(f"🔍 run_sim called with min_pass_catchers: {params.get('min_pass_catchers', 'NOT IN PARAMS')}")
 
     full_lineup, player_cnts = rs.run_single_iter(sim, params, to_add, to_drop, st.session_state['previous_lineups'])
 
@@ -522,23 +525,55 @@ def main():
             db_path = get_db_path(db_name)
             rs, player_data, sim, cur_params = init_sim(db_path, op_params, week, year)
             
+            # Initialize or sync session state for min_pass_catcher
+            # On first load OR if user hasn't manually changed it, use DB value
+            db_min_pass_catcher = cur_params.get('min_pass_catchers', 0)
+            
+            if 'min_pass_catchers' not in st.session_state:
+                # First time - initialize from DB
+                st.session_state['min_pass_catchers'] = db_min_pass_catcher
+                st.session_state['min_pass_catcher_db_value'] = db_min_pass_catcher
+            elif 'min_pass_catcher_db_value' not in st.session_state:
+                # Upgrading from old version - save both
+                st.session_state['min_pass_catcher_db_value'] = db_min_pass_catcher
+            elif st.session_state.get('min_pass_catcher_db_value') != db_min_pass_catcher:
+                # DB value changed (e.g., after refresh) - update session state
+                st.session_state['min_pass_catchers'] = db_min_pass_catcher
+                st.session_state['min_pass_catcher_db_value'] = db_min_pass_catcher
+            
             # get the player selection data and set to session state for auto select
             display_data = get_display_data(player_data, week, year, username)
             if "dd" not in st.session_state: st.session_state["dd"] = display_data
             if 'my_team' not in st.session_state: st.session_state['my_team'] = None
             if 'save_click' not in st.session_state: st.session_state['save_click'] = False
+            if 'run_sim' not in st.session_state: st.session_state['run_sim'] = False
 
             with st.sidebar:
                 authenticator.logout('Logout', 'main')
                         
                 st.header('Reset Current Selections')
                 if st.button("Refresh Data"):
+                    # Clear all caches to force re-pulling params and re-initializing sim
                     pull_op_params.clear()
                     init_sim.clear()
-                    st.session_state["dd"] = get_display_data(player_data, week, year, username)
+                    
+                    # Re-pull params and re-init simulation (will get new randomized values)
+                    op_params_new, _ = pull_op_params(db_name, week, year)
+                    rs_new, player_data_new, sim_new, cur_params_new = init_sim(db_path, op_params_new, week, year)
+                    
+                    # Update min_pass_catcher from the newly loaded params
+                    new_min_pass_catcher = cur_params_new.get('min_pass_catchers', 0)
+                    st.session_state['min_pass_catchers'] = new_min_pass_catcher
+                    st.session_state['min_pass_catcher_db_value'] = new_min_pass_catcher
+                    
+                    # Reset other session state
+                    st.session_state["dd"] = get_display_data(player_data_new, week, year, username)
                     st.session_state['previous_lineups'] = create_previous_lineups(week, year, username)
                     st.session_state['my_team'] = None
                     st.session_state['save_click'] = False
+                    st.session_state['run_sim'] = False
+                    
+                    st.experimental_rerun()
 
 
                 st.header("Full Lineup or Player-by-Player")
@@ -548,6 +583,28 @@ def main():
                     )
                 if lineup_type == "Full Lineup": st.session_state["full_lineup"] = True
                 else: st.session_state["full_lineup"] = False
+                
+                st.header("QB-Stack Partners")
+                st.session_state['min_pass_catchers'] = st.number_input(
+                    'Number of QB-Stack Partners',
+                    min_value=0,
+                    max_value=5,
+                    value=int(st.session_state['min_pass_catchers']),
+                    step=1,
+                    help='Minimum number of pass catchers to stack with QB'
+                )
+                
+                # Display current value for debugging
+                st.write(f"Session State: {st.session_state['min_pass_catchers']}")
+                
+                # Display all simulation parameters
+                with st.expander("📊 All Simulation Parameters", expanded=False):
+                    st.write("**Current Parameters:**")
+                    st.write(f"- min_pass_catchers (from DB): {cur_params.get('min_pass_catchers', 'NOT FOUND')}")
+                    st.write("---")
+                    for key, value in sorted(cur_params.items()):
+                        if key != 'min_pass_catchers':  # Already shown above
+                            st.write(f"- {key}: {value}")
                 
                 side_bar_labels(last_update, week, year)
 
@@ -587,26 +644,55 @@ def main():
             if 'previous_lineups' not in st.session_state:
                 st.session_state['previous_lineups'] = create_previous_lineups(week, year, username)
             
-            if not st.session_state['save_click']:
+            # Update cur_params with user-modified min_pass_catcher value
+            cur_params = copy.deepcopy(cur_params)
+            cur_params['min_pass_catchers'] = st.session_state['min_pass_catchers']
+            
+            # Debug: Show what we're passing to simulation
+            with st.sidebar:
+                st.write("---")
+                st.write("Debug Info:")
+                st.write(f"Passing min_pass_catchers to sim: {cur_params.get('min_pass_catchers', 'NOT FOUND')}")
+            
+            # Only run simulation when button is clicked
+            if st.session_state['run_sim'] and not st.session_state['save_click']:
                 full_lineup, results = run_sim(selected, rs, sim, cur_params)
+                
+                if st.session_state["full_lineup"]:
+                    st.session_state['my_team'] = selected[selected.player.isin(full_lineup)].copy()
+                    selected.loc[selected.player.isin(full_lineup), 'my_team'] = True
+                
+                else: 
+                    st.session_state['my_team'] = selected.loc[selected.my_team==True]
+                    rm_players = st.session_state['my_team'].player.unique()
+                    results = results[~results.player.isin(rm_players)].reset_index(drop=True)
+                
+                # Reset run_sim flag after simulation completes
+                st.session_state['run_sim'] = False
             
-            if st.session_state["full_lineup"] and not st.session_state['save_click']:
-                st.session_state['my_team'] = selected[selected.player.isin(full_lineup)].copy()
-                selected.loc[selected.player.isin(full_lineup), 'my_team'] = True
-            
-            elif not st.session_state['save_click']: 
-                st.session_state['my_team'] = selected.loc[selected.my_team==True]
-                rm_players = st.session_state['my_team'].player.unique()
-                results = results[~results.player.isin(rm_players)].reset_index(drop=True)
+            elif st.session_state['save_click']:
+                results = pd.DataFrame()
             
             else:
+                # Before first simulation run, show empty results
                 results = pd.DataFrame()
-
+                if st.session_state['my_team'] is None:
+                    st.session_state['my_team'] = selected.loc[selected.my_team==True]
 
             with col2: 
                 st.header('2. Review Top Choices')
                 st.write('*These are the optimal players to choose from* ⬇️')
-                show_results(results)
+                
+                # Add Run Simulation button
+                if st.button("🚀 Run Simulation", type='primary', use_container_width=True):
+                    st.session_state['run_sim'] = True
+                    st.experimental_rerun()
+                
+                # Display results or placeholder
+                if results.empty and not st.session_state['save_click']:
+                    st.info("Click 'Run Simulation' to see optimal player choices")
+                else:
+                    show_results(results)
 
             with col3:      
                 
@@ -623,4 +709,3 @@ def main():
 if __name__ == '__main__':
     main()
 # %%
-
