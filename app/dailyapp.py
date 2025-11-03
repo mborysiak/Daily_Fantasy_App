@@ -294,9 +294,6 @@ def run_sim(df, rs, sim, params):
     
     if st.session_state["full_lineup"]: params['num_iters'] = 1
     else: params['num_iters'] = 25
-    
-    # Debug: Log what we're passing to run_single_iter
-    st.sidebar.write(f"🔍 run_sim called with min_pass_catchers: {params.get('min_pass_catchers', 'NOT IN PARAMS')}")
 
     full_lineup, player_cnts = rs.run_single_iter(sim, params, to_add, to_drop, st.session_state['previous_lineups'])
 
@@ -594,17 +591,11 @@ def main():
                     help='Minimum number of pass catchers to stack with QB'
                 )
                 
-                # Display current value for debugging
-                st.write(f"Session State: {st.session_state['min_pass_catchers']}")
-                
                 # Display all simulation parameters
                 with st.expander("📊 All Simulation Parameters", expanded=False):
                     st.write("**Current Parameters:**")
-                    st.write(f"- min_pass_catchers (from DB): {cur_params.get('min_pass_catchers', 'NOT FOUND')}")
-                    st.write("---")
                     for key, value in sorted(cur_params.items()):
-                        if key != 'min_pass_catchers':  # Already shown above
-                            st.write(f"- {key}: {value}")
+                        st.write(f"- {key}: {value}")
                 
                 side_bar_labels(last_update, week, year)
 
@@ -647,12 +638,6 @@ def main():
             # Update cur_params with user-modified min_pass_catcher value
             cur_params = copy.deepcopy(cur_params)
             cur_params['min_pass_catchers'] = st.session_state['min_pass_catchers']
-            
-            # Debug: Show what we're passing to simulation
-            with st.sidebar:
-                st.write("---")
-                st.write("Debug Info:")
-                st.write(f"Passing min_pass_catchers to sim: {cur_params.get('min_pass_catchers', 'NOT FOUND')}")
             
             # Only run simulation when button is clicked
             if st.session_state['run_sim'] and not st.session_state['save_click']:
