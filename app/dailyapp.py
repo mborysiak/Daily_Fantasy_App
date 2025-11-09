@@ -272,7 +272,7 @@ def init_sim(db_path, op_params, week, year):
         try: op_params[k] = float(v)
         except: op_params[k] = eval(v)
     
-    rs = RunSim(db_path, week, year, pred_vers, reg_ens_vers, million_ens_vers, 1)
+    rs = RunSim(db_path, week, year, pred_vers, reg_ens_vers, million_ens_vers, 1, pull_stats=False)
     params = rs.generate_param_list(op_params)
     sim, p = rs.setup_sim(params[0])
     _, _ = rs.run_single_iter(sim, p, [], [],[])

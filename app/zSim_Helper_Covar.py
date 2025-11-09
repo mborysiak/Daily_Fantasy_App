@@ -934,7 +934,7 @@ from joblib import Parallel, delayed
 
 class RunSim:
 
-    def __init__(self, db_path, week, year, pred_vers, reg_ens_vers, million_ens_vers, total_lineups):
+    def __init__(self, db_path, week, year, pred_vers, reg_ens_vers, million_ens_vers, total_lineups, pull_stats=True):
         
         if '.sqlite3' not in db_path: self.db_path = f'{db_path}/Simulation/Simulation_{year}.sqlite3'
         else: self.db_path = db_path
@@ -950,13 +950,13 @@ class RunSim:
                              'pos_or_neg', 'min_pass_catchers', 'rb_in_stack', 'min_opp_team', 'max_teams_lineup',
                              'max_salary_remain', 'max_overlap', 'prev_qb_wt', 'prev_def_wt', 'prev_te_wt', 'wr_flex_pct', 
                              'rb_flex_pct', 'use_ownership', 'overlap_constraint', 'min_own_three_ten', 'min_own_less_three', 'player_gumbel_temp', 'team_gumbel_temp', 'game_gumbel_temp']
-        
-        try:
-            results_conn = sqlite3.connect(f'{db_path}/DK_Results.sqlite3', timeout=60)
-            self.player_stats = self.pull_past_points(results_conn, week, year)
-            self.prizes = self.get_past_prizes(results_conn, week, year)
-        except:
-            print('No Stats or DK Results')
+        if pull_stats:
+            try:
+                results_conn = sqlite3.connect(f'{db_path}/DK_Results.sqlite3', timeout=60)
+                self.player_stats = self.pull_past_points(results_conn, week, year)
+                self.prizes = self.get_past_prizes(results_conn, week, year)
+            except:
+                print('No Stats or DK Results')
 
     def create_conn(self):
         return sqlite3.connect(self.db_path, timeout=60)
