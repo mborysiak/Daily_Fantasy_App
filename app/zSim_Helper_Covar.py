@@ -230,6 +230,8 @@ class FullLineupSim:
             predictions = pd.concat([labels, predictions], axis=1)
 
         else: 
+            import time
+            start = time.time()
             predictions = self.trunc_normal_dist(col, num_options, use_standard=use_standard)
             predictions = pd.concat([labels, predictions], axis=1)
 
@@ -251,6 +253,8 @@ class FullLineupSim:
 
 
     def trunc_normal_dist(self, col, num_options=500, use_standard=False):
+        import scipy.stats as stats
+        
         if col=='pred_ownership' and use_standard: 
             df = self.standard_ownership_data
         elif col=='pred_ownership': 
@@ -258,11 +262,27 @@ class FullLineupSim:
         elif col=='pred_fp_per_game': 
             df = self.player_data
 
-        pred_list = []
-        for mean_val, sdev, min_sc, max_sc in df[[col, 'std_dev', 'min_score', 'max_score']].values:
-            pred_list.append(self.trunc_normal(mean_val, sdev, min_sc, max_sc, num_options))
+        # Vectorized approach: extract all parameters as arrays
+        means = df[col].values
+        sdevs = df['std_dev'].values
+        min_scores = df['min_score'].values
+        max_scores = df['max_score'].values
+        
+        # Vectorized bounds calculation
+        lower_bounds = (min_scores - means) / sdevs
+        upper_bounds = (max_scores - means) / sdevs
+        
+        # Generate all samples in one vectorized call
+        # Use broadcasting to create shape (num_players, num_options)
+        all_samples = stats.truncnorm.rvs(
+            lower_bounds[:, np.newaxis],  # Shape: (num_players, 1)
+            upper_bounds[:, np.newaxis],  # Shape: (num_players, 1)
+            loc=means[:, np.newaxis],     # Shape: (num_players, 1)
+            scale=sdevs[:, np.newaxis],   # Shape: (num_players, 1)
+            size=(len(means), num_options)
+        )
 
-        return pd.DataFrame(pred_list)
+        return pd.DataFrame(all_samples)
     
     
     @staticmethod
@@ -337,7 +357,14 @@ class FullLineupSim:
                                                         AND million_ens_vers='{self.million_ens_vers}'
                                         ''', self.conn).values[0]
 
-        mean_own = self.pos_or_neg * np.random.normal(mean_own, std_own, size=1).reshape(1, 1)
+        sampled_mean = np.random.normal(mean_own, std_own, size=1).reshape(1, 1)
+        
+        # Only apply pos_or_neg multiplier for standard_ln ownership
+        if self.ownership_vers == 'standard_ln' and self.pos_or_neg != 1:
+            mean_own = self.pos_or_neg * sampled_mean / 1.1
+        else:
+            mean_own = sampled_mean
+        
         return mean_own
     
 
@@ -423,13 +450,13 @@ class FullLineupSim:
 
         self.initialize_player_data()
 
-        self.prepare_data(use_ownership,ownership_vers, num_options, pos_or_neg, min_own_three_ten, min_own_less_three)
+        self.prepare_data(use_ownership,ownership_vers, num_avg_pts, pos_or_neg, min_own_three_ten, min_own_less_three)
         if wr_flex_pct == 'auto': self.flex_mode = 'auto'
         else: self.flex_mode = 'fixed'
 
         player_counts = {player: 0 for player in self.player_data['player']}
         successful_iterations = 0
-        
+                
         for _ in range(num_iters):
 
             iters_run = 0
@@ -451,25 +478,25 @@ class FullLineupSim:
                     overlap_constraint = 'standard'
                     
 
-                cur_pred_fps = self.sample_points(num_options, num_avg_pts)
+                cur_pred_fps = self.sample_points(num_avg_pts, num_avg_pts)
                 if use_ownership == 1:
-                    cur_ownership = self.sample_ownership(num_options, num_avg_pts)
+                    cur_ownership = self.sample_ownership(num_avg_pts, num_avg_pts)
                 else:
                     cur_ownership = np.zeros(len(cur_pred_fps))
-                
                 # Sample standard ownership for low ownership constraints
                 if min_own_three_ten > 0 or min_own_less_three > 0:
-                    std_ownership_pcts = self.sample_standard_ownership(num_options, num_avg_pts)
+                    std_ownership_pcts = self.sample_standard_ownership(num_avg_pts, num_avg_pts)
                 else:
                     std_ownership_pcts = None
-                    
+
                 c, A, b, G, h = self.setup_optimization_problem(to_add, to_drop, cur_pred_fps, cur_ownership, min_pass_catchers, rb_in_stack,
                                                                 min_opp_team, max_teams_lineup, max_salary_remain,
                                                                 max_overlap, prev_qb_wt, prev_def_wt, prev_te_wt, previous_lineups,
-                                                                use_ownership, overlap_constraint, std_ownership_pcts, min_own_three_ten, min_own_less_three, player_gumbel_temp, team_gumbel_temp, game_gumbel_temp)
-                
+                                                                use_ownership, overlap_constraint, std_ownership_pcts, min_own_three_ten, 
+                                                                min_own_less_three, player_gumbel_temp, team_gumbel_temp, game_gumbel_temp)
+
+
                 status, x = self.solve_optimization(c, G, h, A, b)
-                
                 if status != 'optimal':
                     print(f"Optimization failed in iteration {_ + 1}. Status: {status}")
                     continue
@@ -481,7 +508,7 @@ class FullLineupSim:
                 
                 successful_iterations += 1
                 success = True
-
+                
         if successful_iterations == 0:
             print("All optimization attempts failed.")
             return None, None
@@ -496,7 +523,11 @@ class FullLineupSim:
     
     def sample_ownership(self, num_options, num_avg_pts):
         current_ownership = self.ownerships.iloc[:, np.random.choice(range(4, num_options+4), size=num_avg_pts)].mean(axis=1)
-        return current_ownership
+        # Only apply pos_or_neg multiplier for standard_ln ownership
+        if self.ownership_vers == 'standard_ln':
+            return current_ownership * self.pos_or_neg
+        else:
+            return current_ownership
     
     def sample_standard_ownership(self, num_options, num_avg_pts):
         # Sample from standard_ln ownership and convert to percentages
@@ -537,10 +568,10 @@ class FullLineupSim:
         if min_own_three_ten > 0 or min_own_less_three > 0:
             self.standard_ownerships = self.get_predictions('pred_ownership', ownership=True, num_options=num_options+5, use_standard=True)
 
-
     def setup_optimization_problem(self, to_add, to_drop, cur_pred_fps, cur_ownership, min_pass_catchers, rb_in_stack,
                                    min_opp_team, max_teams_lineup, max_salary_remain, max_overlap, prev_qb_wt, 
-                                   prev_def_wt, prev_te_wt, previous_lineups, use_ownership, overlap_constraint, std_ownership_pcts=None, min_own_three_ten=0, min_own_less_three=0, player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
+                                   prev_def_wt, prev_te_wt, previous_lineups, use_ownership, overlap_constraint, std_ownership_pcts=None, 
+                                   min_own_three_ten=0, min_own_less_three=0, player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
         
         n_variables = self.n_players + len(self.unique_teams)
         
@@ -674,6 +705,8 @@ class FullLineupSim:
             if use_ownership==1: 
                 print('Using ownership')
                 self.add_ownership_constraint(G, h, cur_ownership)
+                # Add minimum player ownership constraint when using pos_or_neg = -1
+                self.add_min_player_ownership_constraint(G, h, n_variables, min_own_threshold=-5)
             if min_own_three_ten > 0:
                 self.add_three_ten_ownership_constraint(G, h, std_ownership_pcts, min_own_three_ten)
             if min_own_less_three > 0:
@@ -850,6 +883,24 @@ class FullLineupSim:
             G.append(constraint)
             h.append(-float(min_own_less_three))  # Right-hand side
 
+    def add_min_player_ownership_constraint(self, G, h, n_variables, min_own_threshold=-5):
+        """
+        When using pos_or_neg=-1 with standard_ln ownership, prevent extremely
+        low-owned players from being selected to avoid gaming the constraint.
+        
+        Parameters:
+        - min_own_threshold: Minimum ownership threshold on ln scale (default -5 = ~0.67% owned)
+                           -4.6 = ~1% owned, -3.0 = ~5% owned
+        """
+        if self.pos_or_neg == -1 and self.ownership_vers == 'standard_ln':
+            # Check against ORIGINAL negative ln values in ownership_data (before pos_or_neg flip)
+            for i, ownership_val in enumerate(self.ownership_data['pred_ownership'].values):
+                if ownership_val < min_own_threshold:
+                    constraint = [0] * n_variables
+                    constraint[i] = 1  # Prevent this player from being selected
+                    G.append(constraint)
+                    h.append(0.0)
+
     def solve_optimization(self, c, G, h, A, b):
         return ilp(c, G, h, A.T, b, B=set(range(len(c))))
 
@@ -901,9 +952,8 @@ class RunSim:
                              'rb_flex_pct', 'use_ownership', 'overlap_constraint', 'min_own_three_ten', 'min_own_less_three', 'player_gumbel_temp', 'team_gumbel_temp', 'game_gumbel_temp']
         
         try:
-            stats_conn = sqlite3.connect(f'{db_path}/FastR.sqlite3', timeout=60)
             results_conn = sqlite3.connect(f'{db_path}/DK_Results.sqlite3', timeout=60)
-            self.player_stats = self.pull_past_points(stats_conn, week, year)
+            self.player_stats = self.pull_past_points(results_conn, week, year)
             self.prizes = self.get_past_prizes(results_conn, week, year)
         except:
             print('No Stats or DK Results')
@@ -911,24 +961,17 @@ class RunSim:
     def create_conn(self):
         return sqlite3.connect(self.db_path, timeout=60)
         
+
     @staticmethod
-    def get_past_stats(stats_conn, pos, week, year):
-        if pos=='Defense': colname='defTeam'
-        else: colname='player'
-        return pd.read_sql_query(f'''SELECT {colname} AS player, fantasy_pts
-                                     FROM {pos}_Stats
-                                     WHERE week={week}
-                                            AND season={year}''', stats_conn)
-
-
-
-    def pull_past_points(self, stats_conn, week, year):
-
-        points = pd.DataFrame()
-        for pos in ['QB', 'RB', 'WR', 'TE', 'Defense']:
-            points = pd.concat([points, self.get_past_stats(stats_conn, pos, week, year)])
-
+    def pull_past_points(results_conn, week, year):
+        points = pd.read_sql_query(f'''SELECT player, 
+                                              player_points as fantasy_pts
+                                       FROM Contest_Points
+                                        WHERE week={week}
+                                               AND year={year}
+                                               AND Contest='Million' ''', results_conn)
         return points
+
 
     def calc_winnings(self, to_add):
         results = pd.DataFrame(to_add, columns=['player'])
@@ -1015,7 +1058,6 @@ class RunSim:
         if player_cnts is not None:
             player_cnts = player_cnts[~player_cnts.player.isin(to_add)].reset_index(drop=True)
             self.player_data = sim.player_data.copy()
-        
         return last_lineup, player_cnts
                     
     def run_full_lineup(self, params, to_add, to_drop, previous_lineups):
@@ -1086,9 +1128,9 @@ class RunSim:
 # import warnings
 # warnings.filterwarnings('ignore')
 
-# week = 8
+# week = 3
 # year = 2025
-# total_lineups = 25
+# total_lineups = 50
 
 # model_vers = {
 #             'million_ens_vers': 'random_full_stack_matt0_brier1_include2_kfold3',
@@ -1097,49 +1139,71 @@ class RunSim:
 #             }
 
 
-# d = {
-#     'std_dev_type':{'spline_pred_class80_q80_matt0_brier1_kfold3': 1},
-#     'opt_metric': {'points': 0.4, 'roi': 0.6, 'million': 0., 'roitop': 0., 'etr_points': 0.},
-#     'covar_type': {'no_covar': 1,
-#                     'team_points_trunc': 0.},
-#     'pos_or_neg': {1: 1},
-#     'min_pass_catchers': {1: 0.2, 2: 0.7, 3: 0.1},
-#     'min_own_three_ten': {0: 1, 1: 0., 2: 0., 3: 0., 4: 0., 5:0.},
-#     'min_own_less_three': {0: 1, 1: 0., 2: 0., 3: 0},
-#     'rb_in_stack': {0: 1, 1: 0.},
-#     'num_options': {5000: 1},
-#     'num_avg_pts': {100: 1},
-#     'num_iters': {1: 1},
-#     'ownership_vers': {'mil_div_standard_ln': 0,
-#                         'mil_only': 0.3,
-#                         'mil_times_standard_ln': 0.,
-#                         'roi_only': 0.3,
-#                         'roi_times_standard_ln': 0.,
-#                         'roitop_times_standard_ln': 0.,
-#                         'roitop_only': 0.,
-#                         'standard_ln': 0.4},
-#     'max_teams_lineup': {9: 0, 6: 0., 5: 1},
-#     'max_salary_remain': {750: 0, 1000:0.5, 500: 0.5},
-#     'max_overlap': {5: 0, 6: 0., 7:1}, 
-#     'min_opp_team': {0: 1, 1: 0., 2: 0.},
-#     'prev_qb_wt': {1: 1},
-#     'prev_def_wt': {1: 1},
-#     'prev_te_wt': {1: 1, 4: 0},
-#     'wr_flex_pct': {
-#                     0: 0,
-#                     0.6: 1,
-#                     'auto': 0
-#                     },
-#     'rb_flex_pct': {
-#                     0.4: 0.7,
-#                     0.35: 0.3
-#                     },
-#     'use_ownership': {0: 0.5, 1: 0.5},
-#     'overlap_constraint': {'div_two': 0, 'minus_one': 0., 'plus_wts': 0, 'standard': 1},
-#     'player_gumbel_temp': {0: 0, 0.05: 0.6, 0.15: 0.2, 0.2: 0.2, 0.3: 0, 1.0: 0.},
-#     'team_gumbel_temp': {0: 1, 0.01:0},
-#     'game_gumbel_temp': {0: 0.5, 0.01: 0, 0.05: 0,  0.1: 0, 0.2: 0.5, 0.4: 0., },
-#     }
+# d = {'covar_type': {'kmeans_pred_trunc_new': 0.0,
+#                 'no_covar': 1.0,
+#                 'team_points_trunc': 0.0},
+#  'game_gumbel_temp': {0: 0.5, 0.1: 0.0, 0.2: 0.5, 0.25: 0.0, 0.3: 0.0},
+#  'max_overlap': {3: 0.0,
+#                  5: 0.0,
+#                  6: 0.0,
+#                  7: 1.0,
+#                  8: 0.0,
+#                  9: 0.0,
+#                  11: 0.0,
+#                  13: 0.0},
+#  'max_salary_remain': {500: 0.0, 750: 0.3, 1000: 0.7},
+#  'max_teams_lineup': {4: 0.0, 5: 1.0, 6: 0.0, 8: 0.0, 9: 0.0},
+#  'min_opp_team': {0: 1.0, 1: 0.0, 2: 0.0},
+#  'min_own_less_three': {0: 1.0, 1: 0.0, 2: 0.0, 5: 0.0},
+#  'min_own_three_ten': {0: 1.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0},
+#  'min_pass_catchers': {0: 0.0, 1: 0.0, 2: 0.9, 3: 0.1, 4: 0.0},
+#  'num_avg_pts': {10: 0.0,
+#                  25: 0.0,
+#                  50: 0.0,
+#                  100: 0.0,
+#                  200: 0.5,
+#                  500: 0.5,
+#                  1000: 0.0},
+#  'num_iters': {1: 1.0},
+#  'num_options': {50: 0.0,
+#                  200: 0.0,
+#                  500: 0.0,
+#                  1000: 0.0,
+#                  2000: 0.0,
+#                  3000: 0.0,
+#                  5000: 1.0},
+#  'opt_metric': {'etr_points': 0.0,
+#                 'million': 0.0,
+#                 'points': 0.4,
+#                 'roi': 0.6,
+#                 'roitop': 0.0},
+#  'overlap_constraint': {'constraint_minus': 0.0, 'standard': 1.0},
+#  'ownership_vers': {'mil_div_standard_ln': 0.0,
+#                     'mil_only': 0.0,
+#                     'mil_times_standard_ln': 0.0,
+#                     'roi_only': 0.2,
+#                     'roi_times_standard_ln': 0.2,
+#                     'roitop_only': 0.2,
+#                     'roitop_times_standard_ln': 0.2,
+#                     'standard_ln': 0.2},
+#  'player_gumbel_temp': {0: 1.0,
+#                         0.025: 0.0,
+#                         0.05: 0.0,
+#                         0.1: 0.0,
+#                         0.15: 0.0,
+#                         0.2: 0.0},
+#  'pos_or_neg': {1: 1.0},
+#  'prev_def_wt': {1: 1.0, 2: 0.0},
+#  'prev_qb_wt': {1: 1.0, 2: 0.0, 3: 0.0, 5: 0.0, 7: 0.0},
+#  'prev_te_wt': {1: 1.0, 2: 0.0, 3: 0.0},
+#  'rb_flex_pct': {0: 0.0, 0.3: 0.0, 0.35: 0.3, 0.4: 0.7, 0.5: 0.0},
+#  'rb_in_stack': {0: 0.9, 1: 0.1},
+#  'std_dev_type': {'spline_class80_q80_matt0_brier1_kfold3': 0.5,
+#                   'spline_pred_class80_matt0_brier1_kfold3': 0.0,
+#                   'spline_pred_class80_q80_matt0_brier1_kfold3': 0.5},
+#  'team_gumbel_temp': {0: 1.0},
+#  'use_ownership': {0: 0.7, 1: 0.3},
+#  'wr_flex_pct': {0.5: 0.0, 0.6: 1.0, 0.65: 0.0, 'auto': 0.0}}
 
 # print(f'Running week {week} for year {year}')
 
@@ -1153,7 +1217,8 @@ class RunSim:
 
 # #%%
 
-# sim, p = rs.setup_sim(params[0])
+# sim, p = rs.setup_sim(params[np.random.randint(0, len(params))])
+# # sim, p = rs.setup_sim(params[0])
 
 # to_add = []
 # to_drop = []
@@ -1173,5 +1238,6 @@ class RunSim:
 
 # # %%
 # player_results.groupby('player').agg({'fantasy_pts': 'mean', 'lineup_num': 'count'}).sort_values(by='lineup_num', ascending=False).iloc[:50]
+
 
 # # %%
