@@ -952,8 +952,10 @@ class RunSim:
                              'rb_flex_pct', 'use_ownership', 'overlap_constraint', 'min_own_three_ten', 'min_own_less_three', 'player_gumbel_temp', 'team_gumbel_temp', 'game_gumbel_temp']
         if pull_stats:
             try:
-                results_conn = sqlite3.connect(f'{db_path}/DK_Results.sqlite3', timeout=60)
-                self.player_stats = self.pull_past_points(results_conn, week, year)
+                points_conn = sqlite3.connect(f'{db_path}/DK_Results.sqlite3', timeout=60)
+                results_conn = sqlite3.connect(f'{db_path}/DK_Results/DK_Results_{year}.sqlite3', timeout=60)
+
+                self.player_stats = self.pull_past_points(points_conn, week, year)
                 self.prizes = self.get_past_prizes(results_conn, week, year)
             except:
                 print('No Stats or DK Results')
@@ -977,8 +979,12 @@ class RunSim:
         results = pd.DataFrame(to_add, columns=['player'])
         results = pd.merge(results, self.player_stats, on='player', how='left').fillna(0)
         total_pts = results.fantasy_pts.sum()
-        idx_match = np.argmin(abs(self.prizes.Points - total_pts))
-        prize_money = self.prizes.loc[idx_match, 'prize']
+        min_pts = self.prizes.Points.min()
+        if total_pts < min_pts:
+            prize_money = 0
+        else:
+            idx_match = np.argmin(abs(self.prizes.Points - total_pts))
+            prize_money = self.prizes.loc[idx_match, 'prize']
 
         return prize_money, results
 
@@ -989,7 +995,7 @@ class RunSim:
                                         WHERE week={week}
                                             AND year={year}
                                             AND Contest='Million'
-                                            AND `Rank`<75000 ''', results_conn)
+                                            ''', results_conn)
         return prizes
     
     @staticmethod
@@ -1128,8 +1134,8 @@ class RunSim:
 # import warnings
 # warnings.filterwarnings('ignore')
 
-# week = 3
-# year = 2025
+# week = 14
+# year = 2024
 # total_lineups = 50
 
 # model_vers = {
@@ -1238,6 +1244,5 @@ class RunSim:
 
 # # %%
 # player_results.groupby('player').agg({'fantasy_pts': 'mean', 'lineup_num': 'count'}).sort_values(by='lineup_num', ascending=False).iloc[:50]
-
 
 # # %%
