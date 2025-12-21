@@ -458,11 +458,13 @@ class FullLineupSim:
                 num_options, num_avg_pts, pos_or_neg,
                 min_pass_catchers, rb_in_stack, min_opp_team, max_teams_lineup, max_games_lineup, max_salary_remain,
                 max_overlap, prev_qb_wt, prev_def_wt, prev_te_wt, previous_lineups, wr_flex_pct, rb_flex_pct,
-                use_ownership, overlap_constraint, min_own_three_ten, min_own_less_three, def_min_count, player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
+                use_ownership, use_opt_rank, overlap_constraint, min_own_three_ten, min_own_less_three, def_min_count, 
+                player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
         
         self.conn = conn
         self.opt_metric = opt_metric
         self.std_dev_type = std_dev_type
+        self.use_opt_rank = use_opt_rank
 
         if self.opt_metric != 'points':
             self.use_covar = False
@@ -536,8 +538,35 @@ class FullLineupSim:
         
         return selected_players, player_percentages
     
+    def convert_to_position_rank(self, cur_pred_fps):
+        """
+        Convert predictions to negative logged positional ranks.
+        Rank 1 (best player) gets log(1) = 0, which becomes 0 after negation.
+        Rank 2 gets log(2) = 0.693, which becomes -0.693 after negation.
+        This ensures the optimizer prefers rank 1 over rank 2.
+        """
+        # Create DataFrame with positions to enable groupby
+        df = pd.DataFrame({
+            'pred_value': cur_pred_fps,
+            'pos': self.positions
+        })
+        
+        # Rank within each position (rank 1 = highest value)
+        df['rank'] = df.groupby('pos')['pred_value'].rank(method='min', ascending=False)
+        
+        # Apply negative log transformation
+        df['logged_rank'] = -np.log(df['rank'])
+        
+        # Return as numpy array maintaining original order
+        return df['logged_rank'].values
+    
     def sample_points(self, num_options, num_avg_pts):
         current_points = self.pred_fps.iloc[:, np.random.choice(range(4, num_options+4), size=num_avg_pts)].mean(axis=1)
+        
+        # Convert to position ranks if enabled
+        if self.use_opt_rank == 1:
+            current_points = self.convert_to_position_rank(current_points.values)
+        
         return current_points
     
     def sample_ownership(self, num_options, num_avg_pts):
@@ -1036,7 +1065,8 @@ class RunSim:
                              'ownership_vers',  'num_options', 'num_avg_pts',
                              'pos_or_neg', 'min_pass_catchers', 'rb_in_stack', 'min_opp_team', 'max_teams_lineup', 'max_games_lineup',
                              'max_salary_remain', 'max_overlap', 'prev_qb_wt', 'prev_def_wt', 'prev_te_wt', 'wr_flex_pct', 
-                             'rb_flex_pct', 'use_ownership', 'overlap_constraint', 'min_own_three_ten', 'min_own_less_three', 'def_min_count', 'player_gumbel_temp', 'team_gumbel_temp', 'game_gumbel_temp']
+                             'rb_flex_pct', 'use_ownership', 'use_opt_rank', 'overlap_constraint', 'min_own_three_ten', 
+                             'min_own_less_three', 'def_min_count', 'player_gumbel_temp', 'team_gumbel_temp', 'game_gumbel_temp']
         if pull_stats:
             try:
                 points_conn = sqlite3.connect(f'{db_path}/DK_Results.sqlite3', timeout=60)
@@ -1141,10 +1171,38 @@ class RunSim:
         last_lineup = None
         i = 0
         while last_lineup is None and i < 10:
-            last_lineup, player_cnts = sim.run_sim(conn, to_add, to_drop, p['num_iters'], p['opt_metric'], p['std_dev_type'], p['ownership_vers'], 
-                                                   p['num_options'], p['num_avg_pts'], p['pos_or_neg'], p['min_pass_catchers'], p['rb_in_stack'], p['min_opp_team'], p['max_teams_lineup'], p['max_games_lineup'],
-                                                   p['max_salary_remain'], p['max_overlap'], p['prev_qb_wt'], p['prev_def_wt'], p['prev_te_wt'], previous_lineups,
-                                                   p['wr_flex_pct'], p['rb_flex_pct'], p['use_ownership'], p['overlap_constraint'], p['min_own_three_ten'], p['min_own_less_three'], p['def_min_count'], p['player_gumbel_temp'], p['team_gumbel_temp'], p['game_gumbel_temp'])
+            last_lineup, player_cnts = sim.run_sim(
+                conn, to_add, to_drop,
+                num_iters=p['num_iters'],
+                opt_metric=p['opt_metric'],
+                std_dev_type=p['std_dev_type'],
+                ownership_vers=p['ownership_vers'],
+                num_options=p['num_options'],
+                num_avg_pts=p['num_avg_pts'],
+                pos_or_neg=p['pos_or_neg'],
+                min_pass_catchers=p['min_pass_catchers'],
+                rb_in_stack=p['rb_in_stack'],
+                min_opp_team=p['min_opp_team'],
+                max_teams_lineup=p['max_teams_lineup'],
+                max_games_lineup=p['max_games_lineup'],
+                max_salary_remain=p['max_salary_remain'],
+                max_overlap=p['max_overlap'],
+                prev_qb_wt=p['prev_qb_wt'],
+                prev_def_wt=p['prev_def_wt'],
+                prev_te_wt=p['prev_te_wt'],
+                previous_lineups=previous_lineups,
+                wr_flex_pct=p['wr_flex_pct'],
+                rb_flex_pct=p['rb_flex_pct'],
+                use_ownership=p['use_ownership'],
+                use_opt_rank=p['use_opt_rank'],
+                overlap_constraint=p['overlap_constraint'],
+                min_own_three_ten=p['min_own_three_ten'],
+                min_own_less_three=p['min_own_less_three'],
+                def_min_count=p['def_min_count'],
+                player_gumbel_temp=p['player_gumbel_temp'],
+                team_gumbel_temp=p['team_gumbel_temp'],
+                game_gumbel_temp=p['game_gumbel_temp']
+            )
             i += 1
         conn.close()
 
@@ -1179,19 +1237,19 @@ class RunSim:
         del sim; gc.collect()
         return to_add
     
-    def run_multiple_lineups(self, params, calc_winnings=False, parallelize=False, n_jobs=-1, verbose=0):
+    def run_multiple_lineups(self, params, calc_winnings=False, parallelize=False, n_jobs=-1, verbose=0, to_drop_selected=[]):
         
         existing_players =[]
         if parallelize:
             all_lineups = Parallel(n_jobs=n_jobs, verbose=verbose)(
-                                delayed(self.run_full_lineup)(cur_param, existing_players)
+                                delayed(self.run_full_lineup)(cur_param, existing_players, to_drop=to_drop_selected)
                                 for cur_param in params
                                 )
                                 
         else:
             all_lineups = []
             for cur_params in params:
-                to_add = self.run_full_lineup(cur_params, to_add=[], to_drop=[], previous_lineups=all_lineups)
+                to_add = self.run_full_lineup(cur_params, to_add=[], to_drop=to_drop_selected, previous_lineups=all_lineups)
                 all_lineups.append(to_add)
 
         if calc_winnings:
@@ -1221,7 +1279,7 @@ class RunSim:
 # import warnings
 # warnings.filterwarnings('ignore')
 
-# week = 11
+# week = 16
 # year = 2025
 # total_lineups = 25
 
@@ -1235,7 +1293,7 @@ class RunSim:
 # d = {'covar_type': {'kmeans_pred_trunc_new': 0.0,
 #                     'no_covar': 1.0,
 #                     'team_points_trunc': 0.0},
-#  'game_gumbel_temp': {0: 1, 0.1: 0.0, 0.2: 0., 0.25: 0.0, 0.3: 0.0},
+#  'game_gumbel_temp': {0: 0.5, 0.1: 0.5, 0.2: 0., 0.25: 0.0, 0.3: 0.0},
 #  'max_overlap': {3: 0.0,
 #                  5: 0.0,
 #                  6: 0.0,
@@ -1244,18 +1302,18 @@ class RunSim:
 #                  9: 0,
 #                  11: 0.0,
 #                  13: 0.0},
-#  'max_salary_remain': {500: 0.0, 750: 0.3, 1000: 0.7},
-#  'max_teams_lineup': {4: 0.0, 5: .0, 6: 0.0, 8: 0.0, 9: 1.0},
-#  'min_opp_team': {0: 1.0, 1: 0.0, 2: 0.0},
+#  'max_salary_remain': {500: 0.5, 750: 0., 1000: 0.5},
+#  'max_teams_lineup': {4: 0.0, 5: 1, 6: 0.0, 8: 0.0, 9: 0},
+#  'min_opp_team': {0: 0.7, 1: 0.0, 2: 0.3},
 #  'min_own_less_three': {0: 1.0, 1: 0.0, 2: 0.0, 5: 0.0},
 #  'min_own_three_ten': {0: 1.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0},
 #  'min_pass_catchers': {0: 0.0, 1: 0.1, 2: 0.7, 3: 0.2, 4: 0.0},
 #  'def_min_count': {0: 0., 1: 1},
 #  'num_avg_pts': {10: 0.0,
 #                  25: 0.0,
-#                  50: 0.0,
+#                  50: 0.2,
 #                  100: 0.0,
-#                  200: 0.5,
+#                  200: 0.3,
 #                  500: 0.5,
 #                  1000: 0.0},
 #  'num_iters': {1: 1.0},
@@ -1268,19 +1326,19 @@ class RunSim:
 #                  5000: 1.0},
 #  'opt_metric': {'etr_points': 0.0,
 #                 'million': 0.0,
-#                 'points': 0,
-#                 'roi': 0.,
-#                 'roitop': 1.0,
+#                 'points': 0.4,
+#                 'roi': 0.6,
+#                 'roitop': 0,
 #                 'actual': 0},
 #  'overlap_constraint': {'constraint_minus': 0.0, 'standard': 1.0},
-#  'ownership_vers': {'mil_div_standard_ln': 0.0,
-#                     'mil_only': 0.4,
+#  'ownership_vers': {'mil_div_standard_ln': 1,
+#                     'mil_only': 0.,
 #                     'mil_times_standard_ln': 0.0,
-#                     'roi_only': 0.4,
+#                     'roi_only': 0.,
 #                     'roi_times_standard_ln': 0.,
 #                     'roitop_only': 0.,
 #                     'roitop_times_standard_ln': 0.,
-#                     'standard_ln': 0.2},
+#                     'standard_ln': 0.},
 #  'player_gumbel_temp': {0: 1.0,
 #                         0.025: 0.0,
 #                         0.05: 0.0,
@@ -1291,15 +1349,17 @@ class RunSim:
 #  'prev_def_wt': {1: 1.0, 2: 0.0},
 #  'prev_qb_wt': {1: 1.0, 2: 0.0, 3: 0.0, 5: 0.0, 7: 0.0},
 #  'prev_te_wt': {1: 1.0, 2: 0.0, 3: 0.0},
-#  'rb_flex_pct': {0: 0.0, 0.3: 0.0, 0.35: 0.3, 0.4: 0.7, 0.5: 0.0},
-#  'rb_in_stack': {0: 0.9, 1: 0.1},
+#  'rb_flex_pct': {0: 0, 0.3: 0.0, 0.35: 0.5, 0.4: 0.5, 0.5: 0.0},
+#  'rb_in_stack': {0: 1, 1: 0.},
 #  'std_dev_type': {'spline_class80_q80_matt0_brier1_kfold3': 0.5,
 #                   'spline_pred_class80_matt0_brier1_kfold3': 0.0,
 #                   'spline_pred_class80_q80_matt0_brier1_kfold3': 0.5},
 #  'team_gumbel_temp': {0: 1.0},
-#  'use_ownership': {0: 1},
-#  'wr_flex_pct': {0.5: 0.0, 0.6: 1.0, 0.65: 0.0, 'auto': 0.0},
-#  'max_games_lineup': {3: 1}}
+#  'use_ownership': {0: 1, 1: 0},
+#  'wr_flex_pct': {0.5: 0.0, 0.6: 0.8, 0.65: 0.0, 'auto': 0.2},
+#  'max_games_lineup': {3: 1},
+#  'use_opt_rank': {0: 0.5, 1: 0.5}
+# }
 
 # print(f'Running week {week} for year {year}')
 
@@ -1327,7 +1387,7 @@ class RunSim:
 
 # #%%
 
-# total_winnings, player_results, winnings_list = rs.run_multiple_lineups(params, calc_winnings=True)
+# total_winnings, player_results, winnings_list = rs.run_multiple_lineups(params, calc_winnings=True, to_drop_selected=['Emanuel Wilson'])
 # print(total_winnings)
 # print(winnings_list)
 # player_results.groupby('lineup_num').agg({'fantasy_pts': 'sum'}).sort_values(by='fantasy_pts', ascending=False)
@@ -1336,6 +1396,4 @@ class RunSim:
 # # %%
 # player_results.groupby('player').agg({'fantasy_pts': 'mean', 'lineup_num': 'count'}).sort_values(by='lineup_num', ascending=False).iloc[:50]
 
-# # %%
-
-
+# # # %%
