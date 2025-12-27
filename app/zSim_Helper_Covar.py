@@ -454,11 +454,12 @@ class FullLineupSim:
         self.opponents = self.get_matchups()
 
 
-    def run_sim(self, conn, to_add, to_drop, num_iters, opt_metric, std_dev_type, ownership_vers, 
+    def run_sim(self, conn, to_add, to_drop, num_iters, opt_metric, std_dev_type, ownership_vers,
                 num_options, num_avg_pts, pos_or_neg,
                 min_pass_catchers, rb_in_stack, min_opp_team, max_teams_lineup, max_games_lineup, max_salary_remain,
                 max_overlap, prev_qb_wt, prev_def_wt, prev_te_wt, previous_lineups, wr_flex_pct, rb_flex_pct,
-                use_ownership, use_opt_rank, overlap_constraint, min_own_three_ten, min_own_less_three, def_min_count, 
+                use_ownership, use_opt_rank, overlap_constraint, min_own_three_ten, min_own_less_three, def_min_count,
+                rb_def_match=0, mini_stack=0,
                 player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
         
         self.conn = conn
@@ -513,8 +514,9 @@ class FullLineupSim:
                 c, A, b, G, h = self.setup_optimization_problem(to_add, to_drop, cur_pred_fps, cur_ownership, min_pass_catchers, rb_in_stack,
                                                                 min_opp_team, max_teams_lineup, max_games_lineup, max_salary_remain,
                                                                 max_overlap, prev_qb_wt, prev_def_wt, prev_te_wt, previous_lineups,
-                                                                use_ownership, overlap_constraint, std_ownership_pcts, min_own_three_ten, 
-                                                                min_own_less_three, def_min_count, player_gumbel_temp, team_gumbel_temp, game_gumbel_temp)
+                                                                use_ownership, overlap_constraint, std_ownership_pcts, min_own_three_ten,
+                                                                min_own_less_three, def_min_count, rb_def_match, mini_stack,
+                                                                player_gumbel_temp, team_gumbel_temp, game_gumbel_temp)
 
 
                 status, x = self.solve_optimization(c, G, h, A, b)
@@ -619,18 +621,28 @@ class FullLineupSim:
             self.standard_ownerships = self.get_predictions('pred_ownership', ownership=True, num_options=num_options+5, use_standard=True)
 
     def setup_optimization_problem(self, to_add, to_drop, cur_pred_fps, cur_ownership, min_pass_catchers, rb_in_stack,
-                                   min_opp_team, max_teams_lineup, max_games_lineup, max_salary_remain, max_overlap, prev_qb_wt, 
-                                   prev_def_wt, prev_te_wt, previous_lineups, use_ownership, overlap_constraint, std_ownership_pcts=None, 
-                                   min_own_three_ten=0, min_own_less_three=0, def_min_count=1, player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
+                                   min_opp_team, max_teams_lineup, max_games_lineup, max_salary_remain, max_overlap, prev_qb_wt,
+                                   prev_def_wt, prev_te_wt, previous_lineups, use_ownership, overlap_constraint, std_ownership_pcts=None,
+                                   min_own_three_ten=0, min_own_less_three=0, def_min_count=1, rb_def_match=0, mini_stack=0,
+                                   player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
         
+        # Store mini_stack flag for use in other methods
+        self.mini_stack_enabled = (mini_stack == 1)
+        
+        # Base variables: players + team binaries + game binaries
         n_variables = self.n_players + len(self.unique_teams) + len(self.unique_games)
+        
+        # Add mini-stack binary variables (one per game) when enabled
+        if self.mini_stack_enabled:
+            n_variables += len(self.unique_games)
         
         c = self.create_objective_function(cur_pred_fps, player_gumbel_temp, team_gumbel_temp, game_gumbel_temp)
         A, b = self.create_equality_constraints()
         G, h = self.create_inequality_constraints(to_add, to_drop, cur_ownership, n_variables, min_pass_catchers, rb_in_stack,
                                                   min_opp_team, max_teams_lineup, max_games_lineup, max_salary_remain,
                                                   max_overlap, prev_qb_wt, prev_def_wt, prev_te_wt, previous_lineups,
-                                                  use_ownership, overlap_constraint, std_ownership_pcts, min_own_three_ten, min_own_less_three, def_min_count)
+                                                  use_ownership, overlap_constraint, std_ownership_pcts, min_own_three_ten, min_own_less_three,
+                                                  def_min_count, rb_def_match, mini_stack)
         return c, A, b, G, h
 
     def create_objective_function(self, cur_pred_fps, player_gumbel_temp=0, team_gumbel_temp=0, game_gumbel_temp=0):
@@ -682,7 +694,14 @@ class FullLineupSim:
                 ])
                 cur_pred_fps = cur_pred_fps + player_noise
         
-        return matrix(list(-cur_pred_fps) + [0] * len(self.unique_teams) + [0] * len(self.unique_games), tc='d')
+        # Base objective: player predictions + zeros for team/game binaries
+        obj = list(-cur_pred_fps) + [0] * len(self.unique_teams) + [0] * len(self.unique_games)
+        
+        # Add zeros for mini-stack binary variables when enabled
+        if self.mini_stack_enabled:
+            obj += [0] * len(self.unique_games)
+        
+        return matrix(obj, tc='d')
     
 
     def set_position_counts(self, wr_flex_pct, rb_flex_pct):
@@ -698,15 +717,18 @@ class FullLineupSim:
     def create_equality_constraints(self):
         A = []
         b = []
+        
+        # Determine extra zeros needed for mini-stack variables
+        mini_stack_zeros = [0.0] * len(self.unique_games) if self.mini_stack_enabled else []
 
         # Constraint: Exact total number of players (always 9)
-        A.append([1.0] * self.n_players + [0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games))
+        A.append([1.0] * self.n_players + [0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games) + mini_stack_zeros)
         b.append(9.0)  # Explicitly set to 9 players
 
         if self.flex_mode == 'auto':
             # Exact position requirements for QB and DEF
             for pos in ['QB', 'DEF']:
-                constraint = [1.0 if p == pos else 0.0 for p in self.positions] + [0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games)
+                constraint = [1.0 if p == pos else 0.0 for p in self.positions] + [0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games) + mini_stack_zeros
                 A.append(constraint)
                 b.append(float(self.position_counts[pos]))
 
@@ -718,22 +740,23 @@ class FullLineupSim:
                 else:
                     flex_constraint.append(0.0)
                     
-            flex_constraint.extend([0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games))
+            flex_constraint.extend([0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games) + mini_stack_zeros)
             A.append(flex_constraint)
             base_flex_total = sum([self.position_counts[pos] for pos in ['RB', 'WR', 'TE']])
             b.append(float(base_flex_total + 1))  # Should equal 7 (6 base + 1 flex)
         else:
             # Fixed position constraints
             for pos, count in self.position_counts.items():
-                constraint = [1.0 if p == pos else 0.0 for p in self.positions] + [0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games)
+                constraint = [1.0 if p == pos else 0.0 for p in self.positions] + [0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games) + mini_stack_zeros
                 A.append(constraint)
                 b.append(float(count))
 
         return matrix(A, tc='d'), matrix(b, tc='d')
     
     def flex_constraint(self, G, h):
+        mini_stack_zeros = [0.0] * len(self.unique_games) if self.mini_stack_enabled else []
         for pos in ['RB', 'WR', 'TE']:
-            constraint = [-1.0 if p == pos else 0.0 for p in self.positions] + [0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games)
+            constraint = [-1.0 if p == pos else 0.0 for p in self.positions] + [0.0] * len(self.unique_teams) + [0.0] * len(self.unique_games) + mini_stack_zeros
             G.append(constraint)
             h.append(-float(self.position_counts[pos]))
         return G, h
@@ -741,7 +764,8 @@ class FullLineupSim:
 
     def create_inequality_constraints(self, to_add, to_drop, cur_ownership, n_variables, min_pass_catchers, rb_in_stack,
                                       min_opp_team, max_teams_lineup, max_games_lineup, max_salary_remain, max_overlap, prev_qb_wt,
-                                      prev_def_wt, prev_te_wt, previous_lineups, use_ownership, overlap_constraint, std_ownership_pcts=None, min_own_three_ten=0, min_own_less_three=0, def_min_count=1):
+                                      prev_def_wt, prev_te_wt, previous_lineups, use_ownership, overlap_constraint, std_ownership_pcts=None,
+                                      min_own_three_ten=0, min_own_less_three=0, def_min_count=1, rb_def_match=0, mini_stack=0):
         G = []
         h = []
 
@@ -752,7 +776,7 @@ class FullLineupSim:
         if self.flex_mode == 'auto': self.flex_constraint(G, h)
 
         if len(to_add) <= 7:
-            if use_ownership==1: 
+            if use_ownership==1:
                 print('Using ownership')
                 self.add_ownership_constraint(G, h, cur_ownership)
                 # Add minimum player ownership constraint when using pos_or_neg = -1
@@ -766,16 +790,21 @@ class FullLineupSim:
             self.add_max_teams_constraint(G, h, n_variables, max_teams_lineup, def_min_count)
             self.add_max_games_constraint(G, h, n_variables, max_games_lineup, def_min_count)
             self.add_overlap_constraint(G, h, n_variables, max_overlap, previous_lineups, prev_qb_wt, prev_def_wt, prev_te_wt, overlap_constraint)
-            
+            if rb_def_match == 1:
+                self.add_rb_def_match_constraint(G, h, n_variables)
+            if mini_stack == 1:
+                self.add_mini_stack_constraint(G, h, n_variables)
+
         return matrix(np.array(G), tc='d'), matrix(h, tc='d')
     
 
     def add_salary_constraint(self, G, h, max_salary_remain):
-        G.append(list(self.salaries) + [0] * len(self.unique_teams) + [0] * len(self.unique_games))
+        mini_stack_zeros = [0] * len(self.unique_games) if self.mini_stack_enabled else []
+        G.append(list(self.salaries) + [0] * len(self.unique_teams) + [0] * len(self.unique_games) + mini_stack_zeros)
         h.append(float(self.salary_cap))
 
         # New constraint: Total salary >= SALARY_CAP - max_salary_remain
-        G.append([-s for s in self.salaries] + [0] * len(self.unique_teams) + [0] * len(self.unique_games))
+        G.append([-s for s in self.salaries] + [0] * len(self.unique_teams) + [0] * len(self.unique_games) + mini_stack_zeros)
         h.append(-float(self.salary_cap - max_salary_remain))
 
     def add_forced_players_constraint(self, G, h, n_variables, to_add):
@@ -894,7 +923,8 @@ class FullLineupSim:
             G.append(constraint)
             h.append(0.0)
 
-        G.append([0] * self.n_players + [1] * len(self.unique_teams) + [0] * len(self.unique_games))
+        mini_stack_zeros = [0] * len(self.unique_games) if self.mini_stack_enabled else []
+        G.append([0] * self.n_players + [1] * len(self.unique_teams) + [0] * len(self.unique_games) + mini_stack_zeros)
         h.append(float(max_teams_lineup))
 
     def add_max_games_constraint(self, G, h, n_variables, max_games_lineup, def_min_count):
@@ -939,7 +969,8 @@ class FullLineupSim:
             h.append(0.0)
         
         # Final constraint: sum of game binaries <= max_games_lineup
-        G.append([0] * self.n_players + [0] * len(self.unique_teams) + [1] * len(self.unique_games))
+        mini_stack_zeros = [0] * len(self.unique_games) if self.mini_stack_enabled else []
+        G.append([0] * self.n_players + [0] * len(self.unique_teams) + [1] * len(self.unique_games) + mini_stack_zeros)
         h.append(float(max_games_lineup))
 
     def add_overlap_constraint(self, G, h, n_variables, max_overlap, previous_lineups, prev_qb_wt, prev_def_wt, prev_te_wt, overlap_constraint):
@@ -966,11 +997,13 @@ class FullLineupSim:
                 h.append(float(max_overlap-int(prev_qb_wt/2)-int(prev_def_wt/2)-int(prev_te_wt/2)))
 
     def add_ownership_constraint(self, G, h, cur_ownership):
-        G.append([-o for o in cur_ownership] + [0] * len(self.unique_teams) + [0] * len(self.unique_games))
+        mini_stack_zeros = [0] * len(self.unique_games) if self.mini_stack_enabled else []
+        G.append([-o for o in cur_ownership] + [0] * len(self.unique_teams) + [0] * len(self.unique_games) + mini_stack_zeros)
         h.append(-self.min_ownership)
 
     def add_three_ten_ownership_constraint(self, G, h, std_ownership_pcts, min_own_three_ten):
         if std_ownership_pcts is not None and min_own_three_ten > 0:
+            mini_stack_zeros = [0.0] * len(self.unique_games) if self.mini_stack_enabled else []
             # Create constraint directly: sum of players in 3-10% bucket >= min_own_three_ten
             constraint = []
             for i, ownership_pct in enumerate(std_ownership_pcts):
@@ -981,11 +1014,13 @@ class FullLineupSim:
             
             constraint.extend([0.0] * len(self.unique_teams))  # Team variables
             constraint.extend([0.0] * len(self.unique_games))  # Game variables
+            constraint.extend(mini_stack_zeros)  # Mini-stack variables
             G.append(constraint)
             h.append(-float(min_own_three_ten))  # Right-hand side
 
     def add_less_three_ownership_constraint(self, G, h, std_ownership_pcts, min_own_less_three):
         if std_ownership_pcts is not None and min_own_less_three > 0:
+            mini_stack_zeros = [0.0] * len(self.unique_games) if self.mini_stack_enabled else []
             # Create constraint directly: sum of players in <3% bucket >= min_own_less_three
             constraint = []
             for i, ownership_pct in enumerate(std_ownership_pcts):
@@ -996,6 +1031,7 @@ class FullLineupSim:
             
             constraint.extend([0.0] * len(self.unique_teams))  # Team variables
             constraint.extend([0.0] * len(self.unique_games))  # Game variables
+            constraint.extend(mini_stack_zeros)  # Mini-stack variables
             G.append(constraint)
             h.append(-float(min_own_less_three))  # Right-hand side
 
@@ -1003,7 +1039,7 @@ class FullLineupSim:
         """
         When using pos_or_neg=-1 with standard_ln ownership, prevent extremely
         low-owned players from being selected to avoid gaming the constraint.
-        
+
         Parameters:
         - min_own_threshold: Minimum ownership threshold on ln scale (default -5 = ~0.67% owned)
                            -4.6 = ~1% owned, -3.0 = ~5% owned
@@ -1016,6 +1052,131 @@ class FullLineupSim:
                     constraint[i] = 1  # Prevent this player from being selected
                     G.append(constraint)
                     h.append(0.0)
+
+    def add_rb_def_match_constraint(self, G, h, n_variables):
+        """
+        Constraint: At least one RB (including FLEX) must be from the same team as the selected DEF.
+
+        For each DEF, if selected, ensure at least one RB from the same team is selected.
+        This is formulated as: DEF_i - sum(RBs_same_team) <= 0
+        Which means: if DEF_i = 1, then sum(RBs_same_team) >= 1
+        """
+        for team in self.unique_teams:
+            # Get the DEF index for this team
+            def_indices = [i for i, (pos, t) in enumerate(zip(self.positions, self.teams)) if pos == 'DEF' and t == team]
+
+            # Get all RB indices for this team
+            rb_indices = [i for i, (pos, t) in enumerate(zip(self.positions, self.teams)) if pos == 'RB' and t == team]
+
+            # Only add constraint if both DEF and at least one RB exist for this team
+            if def_indices and rb_indices:
+                for def_index in def_indices:
+                    constraint = [0] * n_variables
+                    constraint[def_index] = 1  # If DEF selected (coefficient = 1)
+                    for rb_index in rb_indices:
+                        constraint[rb_index] = -1  # Need at least one RB (coefficient = -1)
+                    G.append(constraint)
+                    h.append(0.0)  # DEF - sum(RBs) <= 0
+
+    def add_mini_stack_constraint(self, G, h, n_variables):
+        """
+        Constraint: Require at least 2 skill position players (RB/WR/TE) from a single game
+        different from the QB's game, with players from BOTH opposing teams in that game.
+        
+        Uses auxiliary binary variables (y_g) for each game to track if it has a valid mini-stack.
+        A valid mini-stack means: at least 1 skill player from Team A AND at least 1 from Team B.
+        
+        Variables layout:
+        - [0 : n_players] = player selection binaries
+        - [n_players : n_players + n_teams] = team binaries (for max_teams constraint)
+        - [n_players + n_teams : n_players + n_teams + n_games] = game binaries (for max_games constraint)
+        - [n_players + n_teams + n_games : n_players + n_teams + 2*n_games] = mini-stack binaries (y_g)
+        """
+        # Create mapping from game_id to its index
+        game_to_idx = {game_id: idx for idx, game_id in enumerate(self.unique_games)}
+        
+        # Starting index for mini-stack binary variables
+        mini_stack_var_start = self.n_players + len(self.unique_teams) + len(self.unique_games)
+        
+        # For each game, set up constraints linking mini-stack binary to player selections
+        for game_id in self.unique_games:
+            game_idx = game_to_idx[game_id]
+            mini_stack_var_idx = mini_stack_var_start + game_idx
+            
+            # Get the two teams in this game
+            teams_in_game = [team for team, gid in self.team_to_game.items() if gid == game_id]
+            if len(teams_in_game) != 2:
+                continue
+            
+            team_a, team_b = teams_in_game[0], teams_in_game[1]
+            
+            # Get skill position players for each team in this game
+            team_a_skill_indices = [
+                i for i, (pos, t) in enumerate(zip(self.positions, self.teams))
+                if pos in ['RB', 'WR', 'TE'] and t == team_a
+            ]
+            team_b_skill_indices = [
+                i for i, (pos, t) in enumerate(zip(self.positions, self.teams))
+                if pos in ['RB', 'WR', 'TE'] and t == team_b
+            ]
+            
+            # Skip if either team has no skill players
+            if not team_a_skill_indices or not team_b_skill_indices:
+                continue
+            
+            # Constraint 1: If mini-stack binary y_g = 1, need at least 1 player from team A
+            # y_g - sum(team_a_players) <= 0
+            # Means: if y_g = 1, then sum(team_a_players) >= 1
+            constraint = [0] * n_variables
+            constraint[mini_stack_var_idx] = 1
+            for idx in team_a_skill_indices:
+                constraint[idx] = -1
+            G.append(constraint)
+            h.append(0.0)
+            
+            # Constraint 2: If mini-stack binary y_g = 1, need at least 1 player from team B
+            # y_g - sum(team_b_players) <= 0
+            constraint = [0] * n_variables
+            constraint[mini_stack_var_idx] = 1
+            for idx in team_b_skill_indices:
+                constraint[idx] = -1
+            G.append(constraint)
+            h.append(0.0)
+            
+            # Constraint 3: y_g can only be 1 if players from both teams are selected
+            # This is implicitly handled by constraints 1 and 2 above
+        
+        # For each QB, require at least one non-QB-game to have a valid mini-stack
+        for qb_team in self.unique_teams:
+            qb_indices = [i for i, (pos, t) in enumerate(zip(self.positions, self.teams))
+                          if pos == 'QB' and t == qb_team]
+            
+            if not qb_indices:
+                continue
+            
+            # Get the QB's game
+            qb_game_id = self.team_to_game[qb_team]
+            
+            # Get indices of mini-stack binaries for games OTHER than QB's game
+            non_qb_game_mini_stack_indices = [
+                mini_stack_var_start + game_to_idx[game_id]
+                for game_id in self.unique_games
+                if game_id != qb_game_id
+            ]
+            
+            if not non_qb_game_mini_stack_indices:
+                continue
+            
+            for qb_index in qb_indices:
+                # If QB selected, need at least one non-QB game to have a mini-stack
+                # QB - sum(y_g for non-QB games) <= 0
+                # Means: if QB = 1, then sum(y_g) >= 1
+                constraint = [0] * n_variables
+                constraint[qb_index] = 1
+                for mini_stack_idx in non_qb_game_mini_stack_indices:
+                    constraint[mini_stack_idx] = -1
+                G.append(constraint)
+                h.append(0.0)
 
     def solve_optimization(self, c, G, h, A, b):
         return ilp(c, G, h, A.T, b, B=set(range(len(c))))
@@ -1064,9 +1225,10 @@ class RunSim:
         self.col_ordering = ['opt_metric', 'std_dev_type', 'covar_type', 'num_iters',
                              'ownership_vers',  'num_options', 'num_avg_pts',
                              'pos_or_neg', 'min_pass_catchers', 'rb_in_stack', 'min_opp_team', 'max_teams_lineup', 'max_games_lineup',
-                             'max_salary_remain', 'max_overlap', 'prev_qb_wt', 'prev_def_wt', 'prev_te_wt', 'wr_flex_pct', 
-                             'rb_flex_pct', 'use_ownership', 'use_opt_rank', 'overlap_constraint', 'min_own_three_ten', 
-                             'min_own_less_three', 'def_min_count', 'player_gumbel_temp', 'team_gumbel_temp', 'game_gumbel_temp']
+                             'max_salary_remain', 'max_overlap', 'prev_qb_wt', 'prev_def_wt', 'prev_te_wt', 'wr_flex_pct',
+                             'rb_flex_pct', 'use_ownership', 'use_opt_rank', 'overlap_constraint', 'min_own_three_ten',
+                             'min_own_less_three', 'def_min_count', 'rb_def_match', 'mini_stack',
+                             'player_gumbel_temp', 'team_gumbel_temp', 'game_gumbel_temp']
         if pull_stats:
             try:
                 points_conn = sqlite3.connect(f'{db_path}/DK_Results.sqlite3', timeout=60)
@@ -1199,6 +1361,8 @@ class RunSim:
                 min_own_three_ten=p['min_own_three_ten'],
                 min_own_less_three=p['min_own_less_three'],
                 def_min_count=p['def_min_count'],
+                rb_def_match=p['rb_def_match'],
+                mini_stack=p['mini_stack'],
                 player_gumbel_temp=p['player_gumbel_temp'],
                 team_gumbel_temp=p['team_gumbel_temp'],
                 game_gumbel_temp=p['game_gumbel_temp']
@@ -1279,7 +1443,7 @@ class RunSim:
 # import warnings
 # warnings.filterwarnings('ignore')
 
-# week = 16
+# week = 15
 # year = 2025
 # total_lineups = 25
 
@@ -1293,7 +1457,7 @@ class RunSim:
 # d = {'covar_type': {'kmeans_pred_trunc_new': 0.0,
 #                     'no_covar': 1.0,
 #                     'team_points_trunc': 0.0},
-#  'game_gumbel_temp': {0: 0.5, 0.1: 0.5, 0.2: 0., 0.25: 0.0, 0.3: 0.0},
+#  'game_gumbel_temp': {0: 1, 0.1: 0., 0.2: 0., 0.25: 0.0, 0.3: 0.0},
 #  'max_overlap': {3: 0.0,
 #                  5: 0.0,
 #                  6: 0.0,
@@ -1303,18 +1467,18 @@ class RunSim:
 #                  11: 0.0,
 #                  13: 0.0},
 #  'max_salary_remain': {500: 0.5, 750: 0., 1000: 0.5},
-#  'max_teams_lineup': {4: 0.0, 5: 1, 6: 0.0, 8: 0.0, 9: 0},
+#  'max_teams_lineup': {4: 0.0, 5: 1, 6: 0., 8: 0.0, 9: 0},
 #  'min_opp_team': {0: 0.7, 1: 0.0, 2: 0.3},
 #  'min_own_less_three': {0: 1.0, 1: 0.0, 2: 0.0, 5: 0.0},
 #  'min_own_three_ten': {0: 1.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0},
 #  'min_pass_catchers': {0: 0.0, 1: 0.1, 2: 0.7, 3: 0.2, 4: 0.0},
-#  'def_min_count': {0: 0., 1: 1},
-#  'num_avg_pts': {10: 0.0,
-#                  25: 0.0,
-#                  50: 0.2,
+#  'def_min_count': {0: 1, 1: 0},
+#  'num_avg_pts': {10: 0.2,
+#                  25: 0.2,
+#                  50: 0.6,
 #                  100: 0.0,
-#                  200: 0.3,
-#                  500: 0.5,
+#                  200: 0.,
+#                  500: 0.,
 #                  1000: 0.0},
 #  'num_iters': {1: 1.0},
 #  'num_options': {50: 0.0,
@@ -1331,14 +1495,14 @@ class RunSim:
 #                 'roitop': 0,
 #                 'actual': 0},
 #  'overlap_constraint': {'constraint_minus': 0.0, 'standard': 1.0},
-#  'ownership_vers': {'mil_div_standard_ln': 1,
-#                     'mil_only': 0.,
+#  'ownership_vers': {'mil_div_standard_ln': 0,
+#                     'mil_only': 0.4,
 #                     'mil_times_standard_ln': 0.0,
-#                     'roi_only': 0.,
+#                     'roi_only': 0.4,
 #                     'roi_times_standard_ln': 0.,
 #                     'roitop_only': 0.,
 #                     'roitop_times_standard_ln': 0.,
-#                     'standard_ln': 0.},
+#                     'standard_ln': 0.2},
 #  'player_gumbel_temp': {0: 1.0,
 #                         0.025: 0.0,
 #                         0.05: 0.0,
@@ -1346,8 +1510,8 @@ class RunSim:
 #                         0.15: 0.0,
 #                         0.2: 0.0},
 #  'pos_or_neg': {1: 1.0},
-#  'prev_def_wt': {1: 1.0, 2: 0.0},
-#  'prev_qb_wt': {1: 1.0, 2: 0.0, 3: 0.0, 5: 0.0, 7: 0.0},
+#  'prev_def_wt': {1: 1, 2: 0},
+#  'prev_qb_wt': {1: 0.5, 2: 0.5, 3: 0.0, 5: 0.0, 7: 0.0},
 #  'prev_te_wt': {1: 1.0, 2: 0.0, 3: 0.0},
 #  'rb_flex_pct': {0: 0, 0.3: 0.0, 0.35: 0.5, 0.4: 0.5, 0.5: 0.0},
 #  'rb_in_stack': {0: 1, 1: 0.},
@@ -1355,10 +1519,12 @@ class RunSim:
 #                   'spline_pred_class80_matt0_brier1_kfold3': 0.0,
 #                   'spline_pred_class80_q80_matt0_brier1_kfold3': 0.5},
 #  'team_gumbel_temp': {0: 1.0},
-#  'use_ownership': {0: 1, 1: 0},
-#  'wr_flex_pct': {0.5: 0.0, 0.6: 0.8, 0.65: 0.0, 'auto': 0.2},
-#  'max_games_lineup': {3: 1},
-#  'use_opt_rank': {0: 0.5, 1: 0.5}
+#  'use_ownership': {0: 0.5, 1: 0.5},
+#  'wr_flex_pct': {0.5: 0.0, 0.6: 1, 0.65: 0.0, 'auto': 0.},
+#  'max_games_lineup': {9: 1},
+#  'use_opt_rank': {0: 1, 1: 0.},
+#  'rb_def_match': {0: 0, 1: 1},
+#  'mini_stack': {0: 0, 1: 1}
 # }
 
 # print(f'Running week {week} for year {year}')
@@ -1397,3 +1563,5 @@ class RunSim:
 # player_results.groupby('player').agg({'fantasy_pts': 'mean', 'lineup_num': 'count'}).sort_values(by='lineup_num', ascending=False).iloc[:50]
 
 # # # %%
+
+# # %%
